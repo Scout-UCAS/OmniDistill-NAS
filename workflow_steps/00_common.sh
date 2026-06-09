@@ -71,3 +71,38 @@ print_step() {
 run_python() {
   "${PYTHON}" "$@"
 }
+
+is_real_workflow_backend() {
+  case "${WORKFLOW_BACKEND:-toy}" in
+    qwen|model|real|llm|vlm|vla) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+build_model_args() {
+  MODEL_ARGS=(
+    --model-id "${MODEL_ID:-Qwen/Qwen3-0.6B}"
+    --model-kind "${MODEL_KIND:-auto}"
+    --device "${DEVICE:-auto}"
+    --dtype "${DTYPE:-auto}"
+    --cache-dir "${MODEL_CACHE_DIR:-${HF_HOME}/models}"
+    --prompt-source "${PROMPT_SOURCE:-built_in}"
+    --seq-len "${SEQ_LEN:-128}"
+    --max-prompts "${MAX_PROMPTS:-2}"
+    --mmlu-dataset "${MMLU_DATASET:-cais/mmlu}"
+    --mmlu-subject "${MMLU_SUBJECT:-abstract_algebra}"
+    --mmlu-split "${MMLU_SPLIT:-test}"
+    --dataset-cache-dir "${DATASET_CACHE_DIR:-${HF_HOME}/datasets}"
+    --vlm-blank-image-size "${VLM_BLANK_IMAGE_SIZE:-224}"
+  )
+  if [[ -n "${DATASET_NAME:-}" ]]; then MODEL_ARGS+=(--dataset-name "${DATASET_NAME}"); fi
+  if [[ -n "${DATASET_CONFIG:-}" ]]; then MODEL_ARGS+=(--dataset-config "${DATASET_CONFIG}"); fi
+  if [[ -n "${DATASET_SPLIT:-}" ]]; then MODEL_ARGS+=(--dataset-split "${DATASET_SPLIT}"); fi
+  if [[ -n "${DATASET_PATH:-}" ]]; then MODEL_ARGS+=(--dataset-path "${DATASET_PATH}"); fi
+  if [[ -n "${DATASET_TASK:-}" ]]; then MODEL_ARGS+=(--dataset-task "${DATASET_TASK}"); fi
+  if [[ -n "${DATASET_IMAGE_ROOT:-}" ]]; then MODEL_ARGS+=(--dataset-image-root "${DATASET_IMAGE_ROOT}"); fi
+  if [[ -n "${IMAGE_PATH:-}" ]]; then MODEL_ARGS+=(--image-path "${IMAGE_PATH}"); fi
+  if [[ "${INCLUDE_DATASET_TARGET:-0}" =~ ^(1|true|yes|on)$ ]]; then MODEL_ARGS+=(--include-dataset-target); fi
+  if [[ "${ALLOW_BLANK_IMAGE:-0}" =~ ^(1|true|yes|on)$ ]]; then MODEL_ARGS+=(--allow-blank-image); fi
+  if [[ "${NO_VLM_GENERATION_PROMPT:-0}" =~ ^(1|true|yes|on)$ ]]; then MODEL_ARGS+=(--no-vlm-generation-prompt); fi
+}

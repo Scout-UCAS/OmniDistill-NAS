@@ -39,8 +39,7 @@ bash workflow_steps/08_gkd_distill.sh
 
 ## Stage Files
 
-The staged reference workflow writes artifacts under clearly named stage
-directories:
+The staged workflow writes artifacts under clearly named stage directories:
 
 ```text
 outputs/distill_nas_workflow/
@@ -64,6 +63,30 @@ outputs/distill_nas_workflow/
 
 Use `WORKFLOW_OUTPUT_DIR=outputs/<name>` to move the whole workflow tree.
 `STAGE_DIR=...` remains accepted as a backward-compatible alias.
+
+## Backends
+
+The scripts support two backends:
+
+- `WORKFLOW_BACKEND=toy` runs the tiny reference model for fast local checks.
+- `WORKFLOW_BACKEND=qwen` runs the real Qwen-style LLM/VLM/VLA pipeline with
+  `scripts/run_staged_model_pipeline.py`.
+
+Real Qwen smoke run:
+
+```bash
+WORKFLOW_BACKEND=qwen \
+MODEL_ID=Qwen/Qwen3-0.6B \
+DEVICE=gpu \
+MODEL_VARIANTS=parent,skip_attn,skip_mlp,skip_both,all_core_attn \
+MAX_LAYERS=2 \
+MAX_PROMPTS=2 \
+bash workflow_steps/run_all.sh
+```
+
+VLM/VLA runs use the same stages. Set `MODEL_KIND=vlm` or `MODEL_KIND=vla`,
+pass a matching `MODEL_ID`, and use `PROMPT_SOURCE`, `DATASET_*`, `IMAGE_PATH`,
+or `ALLOW_BLANK_IMAGE=1` as needed.
 
 ## Common Overrides
 
@@ -96,8 +119,7 @@ GKD_STEPS=20 OPD_WEIGHT=0.25 OPD_MAX_NEW_TOKENS=8 \
 bash workflow_steps/08_gkd_distill.sh
 ```
 
-The staged scripts use the tiny reference model so every stage can run quickly
-and produce concrete artifacts. Real Qwen/VLM/VLA runs still use
-`scripts/run_qwen3_attention_search.py`; the stage artifacts here mirror the
-same BLD, NAS scoring, MIP, assembly, and GKD concepts in a compact executable
-workflow.
+By default, assembly and GKD save delta `.pth` artifacts: model ID, selected
+architecture config, and replacement-layer weights. Set
+`SAVE_FULL_STATE_DICT=1` only when you intentionally want a full model
+state-dict checkpoint.

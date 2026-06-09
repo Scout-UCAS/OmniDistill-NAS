@@ -3,6 +3,7 @@ from __future__ import annotations
 import itertools
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from typing import Any
 
 import torch
 from torch import nn
@@ -120,8 +121,116 @@ def forward_batch(model: nn.Module, batch, **kwargs):
     if isinstance(batch, dict):
         merged = dict(batch)
         merged.update(kwargs)
-        return model(**merged)
-    return model(batch, **kwargs)
+        try:
+            return model(**merged)
+        except TypeError as exc:
+            if not kwargs:
+                raise
+            try:
+                return model(**batch)
+            except TypeError:
+                raise exc
+    try:
+        return model(batch, **kwargs)
+    except TypeError as exc:
+        if not kwargs:
+            raise
+        try:
+            return model(batch)
+        except TypeError:
+            raise exc
+
+
+def output_value(output: Any, name: str) -> Any:
+    if isinstance(output, dict):
+        return output.get(name)
+    if hasattr(output, name):
+        return getattr(output, name)
+    if hasattr(output, "get"):
+        try:
+            return output.get(name)
+        except Exception:
+            return None
+    return None
+
+
+def output_tensor(output: Any, name: str, context: str) -> torch.Tensor:
+    value = output_value(output, name)
+    if not isinstance(value, torch.Tensor):
+        raise RuntimeError(f"{context} requires model output field {name!r} to be a tensor")
+    return value
+
+
+@dataclass(frozen=True)
+class DistillTarget:
+    name: str
+    tensor: torch.Tensor
+    metric: str
+
+
+ACTION_LOGIT_TARGET_NAMES = (
+    "action_logits",
+    "predicted_action_logits",
+    "action_log_probs",
+)
+ACTION_VALUE_TARGET_NAMES = (
+    "actions",
+    "action",
+    "predicted_actions",
+    "predicted_action",
+    "action_preds",
+    "action_pred",
+)
+DISTILL_TARGET_PRIORITIES = (
+    *((name, "kl") for name in ACTION_LOGIT_TARGET_NAMES),
+    *((name, "mse") for name in ACTION_VALUE_TARGET_NAMES),
+    ("logits", "kl"),
+)
+
+
+def extract_distill_target(output: Any, preferred_name: str | None = None) -> DistillTarget:
+    if isinstance(output, torch.Tensor):
+        metric = "kl" if output.ndim >= 2 else "mse"
+        return DistillTarget("tensor", output, metric)
+    priorities = DISTILL_TARGET_PRIORITIES
+    if preferred_name is not None:
+        priorities = tuple(item for item in priorities if item[0] == preferred_name) + tuple(
+            item for item in priorities if item[0] != preferred_name
+        )
+    for name, metric in priorities:
+        value = output_value(output, name)
+        if isinstance(value, torch.Tensor):
+            return DistillTarget(name, value, metric)
+    if isinstance(output, (tuple, list)):
+        for index, value in enumerate(output):
+            if isinstance(value, torch.Tensor):
+                metric = "kl" if value.ndim >= 2 else "mse"
+                return DistillTarget(f"tuple_{index}", value, metric)
+    raise RuntimeError("model output does not expose logits or action tensors for distillation")
+
+
+def has_action_target(output: Any) -> bool:
+    return any(isinstance(output_value(output, name), torch.Tensor) for name in ACTION_LOGIT_TARGET_NAMES + ACTION_VALUE_TARGET_NAMES)
+
+
+def output_distillation_loss(
+    teacher_output: Any,
+    student_output: Any,
+    temperature: float = 1.0,
+) -> torch.Tensor:
+    teacher = extract_distill_target(teacher_output)
+    student = extract_distill_target(student_output, preferred_name=teacher.name)
+    teacher_tensor = teacher.tensor.to(device=student.tensor.device)
+    if teacher_tensor.shape != student.tensor.shape:
+        raise RuntimeError(
+            f"teacher/student target shape mismatch for {teacher.name}: "
+            f"{tuple(teacher_tensor.shape)} vs {tuple(student.tensor.shape)}"
+        )
+    if teacher.metric == "kl":
+        return logits_kl_loss(teacher_tensor, student.tensor, temperature=temperature)
+    if teacher.metric == "mse":
+        return F.mse_loss(student.tensor.float(), teacher_tensor.float())
+    raise ValueError(f"unknown distillation metric: {teacher.metric}")
 
 
 def sampled_reverse_kl_loss(
@@ -151,6 +260,28 @@ def sampled_reverse_kl_loss(
     return (per_token_reverse_kl * token_mask).sum() / denominator
 
 
+def sampled_action_reverse_kl_loss(
+    teacher_logits: torch.Tensor,
+    student_logits: torch.Tensor,
+    temperature: float = 1.0,
+) -> torch.Tensor:
+    """Monte Carlo reverse-KL term for actions sampled from a student policy."""
+
+    if teacher_logits.shape != student_logits.shape:
+        raise ValueError("teacher_logits and student_logits must have matching shapes")
+    if teacher_logits.ndim < 2:
+        raise ValueError("action logits must have at least a batch and class/action dimension")
+    flat_student = student_logits.reshape(-1, student_logits.shape[-1]) / temperature
+    with torch.no_grad():
+        probs = F.softmax(flat_student, dim=-1)
+        sampled = torch.multinomial(probs, num_samples=1).view(*student_logits.shape[:-1])
+    teacher_log_probs = F.log_softmax(teacher_logits / temperature, dim=-1)
+    student_log_probs = F.log_softmax(student_logits / temperature, dim=-1)
+    selected_teacher = teacher_log_probs.gather(dim=-1, index=sampled.unsqueeze(-1)).squeeze(-1)
+    selected_student = student_log_probs.gather(dim=-1, index=sampled.unsqueeze(-1)).squeeze(-1)
+    return (selected_student - selected_teacher).mean() * (temperature**2)
+
+
 def sample_on_policy_sequences(
     student: nn.Module,
     prompt_ids,
@@ -170,7 +301,7 @@ def sample_on_policy_sequences(
     generated = prompt_input_ids
     generated_batch = batch_with_input_ids(prompt_ids, generated, drop_labels=True)
     for _ in range(max_new_tokens):
-        logits = forward_batch(student, generated_batch).logits[:, -1, :] / temperature
+        logits = output_tensor(forward_batch(student, generated_batch), "logits", "Token OPD sampling")[:, -1, :] / temperature
         if top_k is not None:
             if top_k < 1:
                 raise ValueError("top_k must be positive when provided")
@@ -208,12 +339,63 @@ def on_policy_distillation_loss(
             top_k=top_k,
         )
         sampled_batch = batch_with_input_ids(prompt_ids, sampled_ids, drop_labels=True)
-        teacher_logits = forward_batch(teacher, sampled_batch).logits[:, :-1, :]
-    student_logits = forward_batch(student, sampled_batch).logits[:, :-1, :]
+        teacher_logits = output_tensor(forward_batch(teacher, sampled_batch), "logits", "Token OPD teacher pass")[:, :-1, :]
+    student_logits = output_tensor(forward_batch(student, sampled_batch), "logits", "Token OPD student pass")[:, :-1, :]
     target_ids = sampled_ids[:, 1:]
     label_positions = torch.arange(target_ids.shape[1], device=target_ids.device).unsqueeze(0) + 1
     generated_token_mask = label_positions >= prompt_len
     return sampled_reverse_kl_loss(teacher_logits, student_logits, target_ids, generated_token_mask, temperature)
+
+
+def _extract_named_tensor(output: Any, names: Sequence[str], preferred_name: str | None = None) -> DistillTarget | None:
+    ordered_names = tuple(names)
+    if preferred_name in ordered_names:
+        ordered_names = (preferred_name,) + tuple(name for name in ordered_names if name != preferred_name)
+    for name in ordered_names:
+        value = output_value(output, name)
+        if isinstance(value, torch.Tensor):
+            metric = "kl" if name in ACTION_LOGIT_TARGET_NAMES else "mse"
+            return DistillTarget(name, value, metric)
+    return None
+
+
+def on_policy_action_distillation_loss(
+    teacher: nn.Module,
+    student: nn.Module,
+    batch,
+    temperature: float = 1.0,
+) -> torch.Tensor:
+    """Action-space OPD for VLA-style policies.
+
+    Discrete action distributions use sampled reverse KL. Continuous action
+    predictions use the student action output as the on-policy action sample and
+    match the teacher action prediction on the same observation batch.
+    """
+
+    with torch.no_grad():
+        teacher_output = forward_batch(teacher, batch)
+    student_output = forward_batch(student, batch)
+
+    student_logits = _extract_named_tensor(student_output, ACTION_LOGIT_TARGET_NAMES)
+    if student_logits is not None:
+        teacher_logits = _extract_named_tensor(teacher_output, ACTION_LOGIT_TARGET_NAMES, preferred_name=student_logits.name)
+        if teacher_logits is None:
+            raise RuntimeError(f"teacher output is missing action logits compatible with {student_logits.name}")
+        return sampled_action_reverse_kl_loss(teacher_logits.tensor, student_logits.tensor, temperature=temperature)
+
+    student_action = _extract_named_tensor(student_output, ACTION_VALUE_TARGET_NAMES)
+    if student_action is None:
+        raise RuntimeError("student output does not expose action tensors for action-space OPD")
+    teacher_action = _extract_named_tensor(teacher_output, ACTION_VALUE_TARGET_NAMES, preferred_name=student_action.name)
+    if teacher_action is None:
+        raise RuntimeError(f"teacher output is missing action tensors compatible with {student_action.name}")
+    teacher_tensor = teacher_action.tensor.to(device=student_action.tensor.device)
+    if teacher_tensor.shape != student_action.tensor.shape:
+        raise RuntimeError(
+            f"teacher/student action shape mismatch for {student_action.name}: "
+            f"{tuple(teacher_tensor.shape)} vs {tuple(student_action.tensor.shape)}"
+        )
+    return F.mse_loss(student_action.tensor.float(), teacher_tensor.float())
 
 
 def hidden_cosine_loss(
@@ -228,6 +410,16 @@ def hidden_cosine_loss(
     for teacher, student in zip(teacher_hidden, student_hidden, strict=False):
         losses.append(1.0 - F.cosine_similarity(student, teacher, dim=-1).mean())
     return torch.stack(losses).mean()
+
+
+def hidden_state_sequence(value: Any) -> tuple[torch.Tensor, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, torch.Tensor):
+        return (value,)
+    if isinstance(value, (list, tuple)):
+        return tuple(item for item in value if isinstance(item, torch.Tensor))
+    return ()
 
 
 def _cycle(iterable: Iterable[torch.Tensor]):
@@ -346,27 +538,48 @@ def global_knowledge_distillation(
                 teacher_out = forward_batch(teacher, batch, output_hidden_states=True)
             student_out = forward_batch(student, batch, output_hidden_states=True)
 
-            loss = logits_kl_loss(teacher_out.logits, student_out.logits, temperature)
-            loss = loss + hidden_cosine_loss(teacher_out.hidden_states, student_out.hidden_states)
+            loss = output_distillation_loss(teacher_out, student_out, temperature)
+            teacher_hidden = hidden_state_sequence(output_value(teacher_out, "hidden_states"))
+            student_hidden = hidden_state_sequence(output_value(student_out, "hidden_states"))
+            if teacher_hidden and student_hidden:
+                loss = loss + hidden_cosine_loss(teacher_hidden, student_hidden)
             if include_lm_loss:
                 if input_ids is None:
                     raise ValueError("include_lm_loss requires input_ids in each batch")
-                shift_logits = student_out.logits[:, :-1].contiguous()
+                student_logits = output_value(student_out, "logits")
+                if not isinstance(student_logits, torch.Tensor):
+                    raise ValueError("include_lm_loss requires student logits")
+                shift_logits = student_logits[:, :-1].contiguous()
                 shift_labels = input_ids[:, 1:].contiguous()
                 loss = loss + F.cross_entropy(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
 
-            if opd_weight > 0 and opd_max_new_tokens > 0:
-                if input_ids is None:
-                    raise ValueError("OPD requires input_ids in each batch")
-                opd_loss = on_policy_distillation_loss(
-                    teacher,
-                    student,
-                    batch,
-                    max_new_tokens=opd_max_new_tokens,
-                    temperature=opd_temperature,
-                    top_k=opd_top_k,
-                )
-                loss = loss + opd_weight * opd_loss
+            if opd_weight > 0:
+                if has_action_target(student_out):
+                    opd_loss = on_policy_action_distillation_loss(
+                        teacher,
+                        student,
+                        batch,
+                        temperature=opd_temperature,
+                    )
+                    loss = loss + opd_weight * opd_loss
+                elif opd_max_new_tokens > 0:
+                    if input_ids is None:
+                        raise ValueError("Token OPD requires input_ids in each batch")
+                    if not isinstance(output_value(student_out, "logits"), torch.Tensor):
+                        raise ValueError("Token OPD requires student logits")
+                    opd_loss = on_policy_distillation_loss(
+                        teacher,
+                        student,
+                        batch,
+                        max_new_tokens=opd_max_new_tokens,
+                        temperature=opd_temperature,
+                        top_k=opd_top_k,
+                    )
+                    loss = loss + opd_weight * opd_loss
+                else:
+                    raise ValueError(
+                        "opd_weight > 0 requires action outputs, or opd_max_new_tokens > 0 for token OPD"
+                    )
 
             optimizer.zero_grad(set_to_none=True)
             loss.backward()

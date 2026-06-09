@@ -2,7 +2,7 @@
 
 本仓库是 **OmniDistill-NAS**，根据 [`distillation_nas_paper.pdf`](../distillation_nas_paper.pdf) 中的论文 **Distillation-Based NAS for Inference-Optimized LLMs** 实现了一个轻量、可本地运行的蒸馏式架构搜索框架。
 
-论文原方法面向 Llama/Nemotron 等大模型，并依赖真实硬件上的推理 profiling 数据。本实现保留论文的核心算法流程，用一个小型 causal Transformer 跑通完整 pipeline，便于理解、实验和后续迁移到更大的模型封装上。
+论文原方法面向 Llama/Nemotron 等大模型，并依赖真实硬件上的推理 profiling 数据。本实现保留论文的核心算法流程，同时提供两个后端：小型 causal Transformer 用于快速本地验证，Qwen 风格 LLM/VLM/VLA 后端用于真实模型的分阶段 BLD、NAS 打分、MIP、组装和 GKD/OPD。
 
 ## 实现内容
 
@@ -84,6 +84,18 @@ bash workflow_steps/08_gkd_distill.sh
 bash workflow_steps/run_all.sh
 ```
 
+默认后端是 `toy`，适合快速检查。真实 Qwen/VLM/VLA 分阶段流程使用：
+
+```bash
+WORKFLOW_BACKEND=qwen \
+MODEL_ID=Qwen/Qwen3-0.6B \
+DEVICE=gpu \
+MODEL_VARIANTS=parent,skip_attn,skip_mlp,skip_both,all_core_attn \
+MAX_LAYERS=2 \
+MAX_PROMPTS=2 \
+bash workflow_steps/run_all.sh
+```
+
 常用覆盖参数示例：
 
 ```bash
@@ -117,9 +129,9 @@ TOP_K=5 CONFIG_RANK=1 GKD_STEPS=20 bash workflow_steps/run_all.sh
 
 ## GKD 中加入 OPD
 
-`global_knowledge_distillation` 默认仍然使用原来的离线 GKD，也就是 teacher/student 在同一批 token 上计算 logits KL 和 hidden cosine loss。需要启用 OPD 时，传入正数 `opd_weight`，并设置 `opd_max_new_tokens`。
+`global_knowledge_distillation` 默认仍然使用原来的离线 GKD，也就是 teacher/student 在同一批 token 上计算 logits KL 和 hidden cosine loss。需要启用文本 OPD 时，传入正数 `opd_weight`，设置正数 `opd_max_new_tokens`，并保证 batch 中有 `input_ids`。
 
-OPD 的流程是：先让 student 用当前策略从 prompt 继续采样，再让 teacher 和 student 对这些 student 生成的 token 计算 log-prob，额外优化 sampled reverse-KL：
+文本 OPD 的流程是：先让 student 用当前策略从 prompt 继续采样，再让 teacher 和 student 对这些 student 生成的 token 计算 log-prob，额外优化 sampled reverse-KL：
 
 ```text
 log p_student(token) - log p_teacher(token)
@@ -144,6 +156,8 @@ losses = global_knowledge_distillation(
 ```
 
 该实现参考了 Thinking Machines 的 on-policy distillation 思路：https://thinkingmachines.ai/blog/on-policy-distillation/
+
+VLA 模型还支持 action-space OPD：`action_logits`/`predicted_action_logits` 使用 student 采样动作上的 sampled reverse-KL；连续 `actions`/`predicted_actions` 使用 action MSE，属于 action-space distillation 近似，不执行环境 rollout。因此 GKD 不再只依赖语言 token logits。
 
 ## Attention 候选
 
@@ -186,7 +200,7 @@ fla_moba_attn
 
 ## 注意事项
 
-本仓库没有内置 Llama/Nemotron 权重、真实训练语料或 H100/4090 的硬件测量数据。因此默认 demo 使用 toy model 和 runtime proxy。要迁移到真实 LLM，需要补充：
+本仓库没有内置 Llama/Nemotron 权重、真实训练语料或 H100/4090 的硬件测量数据。因此快速 demo 使用 toy model 和 runtime proxy。真实 Qwen/VLM/VLA 后端已经能加载模型、替换语言解码器层并生成分阶段产物；要迁移到其他模型族，还需要补充：
 
 - 模型 block 的适配层
 - 真实 token 数据
@@ -194,6 +208,20 @@ fla_moba_attn
 - 对应推理引擎的非均匀 block 支持
 
 ## Qwen3-0.6B 真实模型示例
+
+推荐优先使用分阶段 workflow：
+
+```bash
+WORKFLOW_BACKEND=qwen \
+MODEL_ID=Qwen/Qwen3-0.6B \
+DEVICE=gpu \
+MODEL_VARIANTS=parent,skip_attn,skip_mlp,skip_both,all_core_attn,all_fla \
+MAX_LAYERS=2 \
+MAX_PROMPTS=2 \
+bash workflow_steps/run_all.sh
+```
+
+04-08 会分别输出 `block_library.pth`、`layer_importance.json`、top-K config、`assembled_model.pth` 和 `gkd_model.pth`。默认保存的是 delta checkpoint：模型 ID、架构 config 和候选替换层权重；只有设置 `SAVE_FULL_STATE_DICT=1` 时才保存完整模型 state dict。
 
 `scripts/run_qwen3_attention_search.py` 会加载 HuggingFace 上的 `Qwen/Qwen3-0.6B`，在 GPU 上对若干 Transformer 层执行 NAS 候选搜索：
 

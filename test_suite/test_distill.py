@@ -8,11 +8,13 @@ from torch import nn
 
 from distill_nas_core.blocks import make_parent_block
 from distill_nas_core.distill import (
+    extract_distill_target,
     forward_batch,
     global_knowledge_distillation,
     local_distill_block,
     logits_kl_loss,
     move_batch_to_device,
+    sampled_action_reverse_kl_loss,
     sampled_reverse_kl_loss,
     sample_on_policy_sequences,
 )
@@ -54,6 +56,27 @@ class DistillationTest(unittest.TestCase):
         expected = ((selected_student - selected_teacher) * token_mask).sum() / token_mask.sum()
         self.assertTrue(torch.allclose(loss, expected))
 
+    def test_sampled_action_reverse_kl_accepts_batched_action_logits(self) -> None:
+        torch.manual_seed(29)
+        teacher = torch.randn(2, 3, 5)
+        student = torch.randn(2, 3, 5)
+
+        loss = sampled_action_reverse_kl_loss(teacher, student)
+
+        self.assertEqual(loss.ndim, 0)
+        self.assertTrue(torch.isfinite(loss))
+
+    def test_distill_target_prefers_actions_over_language_logits(self) -> None:
+        output = SimpleNamespace(
+            logits=torch.randn(2, 4, 10),
+            actions=torch.randn(2, 7),
+        )
+
+        target = extract_distill_target(output)
+
+        self.assertEqual(target.name, "actions")
+        self.assertEqual(target.metric, "mse")
+
     def test_sample_on_policy_sequences_appends_tokens(self) -> None:
         torch.manual_seed(11)
         model = TinyCausalLM(TinyConfig(vocab_size=16, hidden_size=16, num_layers=1, num_heads=4, intermediate_size=32))
@@ -63,6 +86,66 @@ class DistillationTest(unittest.TestCase):
 
         self.assertEqual(sampled.shape, (2, 5))
         self.assertTrue(torch.equal(sampled[:, :3], prompts))
+
+    def test_token_opd_accepts_dict_logits_outputs(self) -> None:
+        class DictLogitsCausalLM(nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.embedding = nn.Embedding(20, 8)
+                self.head = nn.Linear(8, 20)
+
+            def forward(self, input_ids: torch.Tensor, output_hidden_states: bool = False, **_: object):
+                hidden = self.embedding(input_ids)
+                return {
+                    "logits": self.head(hidden),
+                    "hidden_states": (hidden,) if output_hidden_states else (),
+                }
+
+        torch.manual_seed(13)
+        teacher = DictLogitsCausalLM()
+        student = DictLogitsCausalLM()
+        batch = {"input_ids": torch.randint(0, 20, (2, 3))}
+
+        losses = global_knowledge_distillation(
+            teacher,
+            student,
+            [batch],
+            steps=1,
+            lr=1e-4,
+            opd_weight=0.25,
+            opd_max_new_tokens=2,
+            opd_top_k=8,
+        )
+
+        self.assertEqual(len(losses), 1)
+
+    def test_token_opd_misconfiguration_raises(self) -> None:
+        class FeatureLogitsModel(nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.proj = nn.Linear(3, 12)
+
+            def forward(self, features: torch.Tensor, output_hidden_states: bool = False, **_: object):
+                hidden = self.proj(features).view(features.shape[0], 2, 6)
+                return SimpleNamespace(
+                    logits=hidden,
+                    hidden_states=(hidden,) if output_hidden_states else (),
+                )
+
+        teacher = FeatureLogitsModel()
+        student = FeatureLogitsModel()
+        batch = {"features": torch.randn(2, 3)}
+
+        with self.assertRaisesRegex(ValueError, "Token OPD requires input_ids"):
+            global_knowledge_distillation(
+                teacher,
+                student,
+                [batch],
+                steps=1,
+                lr=1e-4,
+                opd_weight=0.25,
+                opd_max_new_tokens=2,
+            )
 
     def test_forward_batch_accepts_dict_batches(self) -> None:
         model = TinyCausalLM(TinyConfig(vocab_size=16, hidden_size=16, num_layers=1, num_heads=4, intermediate_size=32))
@@ -174,6 +257,63 @@ class DistillationTest(unittest.TestCase):
             opd_weight=0.25,
             opd_max_new_tokens=2,
             opd_top_k=8,
+        )
+
+        self.assertEqual(len(losses), 1)
+
+    def test_global_distillation_supports_continuous_action_opd(self) -> None:
+        class ContinuousActionPolicy(nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.proj = nn.Linear(3, 2)
+
+            def forward(self, proprio: torch.Tensor, output_hidden_states: bool = False, **_: object):
+                actions = self.proj(proprio)
+                hidden_states = (actions.unsqueeze(1),) if output_hidden_states else ()
+                return SimpleNamespace(actions=actions, hidden_states=hidden_states)
+
+        torch.manual_seed(31)
+        teacher = ContinuousActionPolicy()
+        student = ContinuousActionPolicy()
+        batch = {"proprio": torch.randn(4, 3)}
+
+        losses = global_knowledge_distillation(
+            teacher,
+            student,
+            [batch],
+            steps=1,
+            lr=1e-4,
+            opd_weight=0.5,
+            opd_max_new_tokens=0,
+        )
+
+        self.assertEqual(len(losses), 1)
+
+    def test_global_distillation_accepts_tensor_hidden_states(self) -> None:
+        class TensorHiddenCausalLM(nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.embedding = nn.Embedding(20, 8)
+                self.head = nn.Linear(8, 20)
+
+            def forward(self, input_ids: torch.Tensor, output_hidden_states: bool = False, **_: object):
+                hidden = self.embedding(input_ids)
+                return SimpleNamespace(
+                    logits=self.head(hidden),
+                    hidden_states=hidden if output_hidden_states else None,
+                )
+
+        torch.manual_seed(37)
+        teacher = TensorHiddenCausalLM()
+        student = TensorHiddenCausalLM()
+        batch = {"input_ids": torch.randint(0, 20, (2, 3))}
+
+        losses = global_knowledge_distillation(
+            teacher,
+            student,
+            [batch],
+            steps=1,
+            lr=1e-4,
         )
 
         self.assertEqual(len(losses), 1)

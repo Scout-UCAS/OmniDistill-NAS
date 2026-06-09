@@ -19,3 +19,10 @@ Staged workflow:
 ```bash
 bash workflow_steps/run_all.sh
 ```
+
+Real Qwen/VLM/VLA staged workflow:
+
+```bash
+WORKFLOW_BACKEND=qwen MODEL_ID=Qwen/Qwen3-0.6B DEVICE=gpu \
+bash workflow_steps/run_all.sh
+```

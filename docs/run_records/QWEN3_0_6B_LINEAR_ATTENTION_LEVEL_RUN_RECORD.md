@@ -135,7 +135,16 @@ architecture:
 
 ```bash
 cd /root/autodl-tmp/PUZZLE
-bash workflow_steps/05_search_llm_core_attention.sh
+WORKFLOW_BACKEND=qwen \
+MODEL_ID=Qwen/Qwen3-0.6B \
+DEVICE=gpu \
+PROMPT_SOURCE=mmlu \
+MODEL_VARIANTS=parent,parent_attn,mha_attn,quant_mha_attn,mqa_attn,gqa_kv2,mfa_kv2,mla_kv2,mka_attn,all_linear_attn,noop_attn \
+MAX_LAYERS=1 \
+MAX_PROMPTS=2 \
+bash workflow_steps/04_bld_block_library.sh
+WORKFLOW_BACKEND=qwen bash workflow_steps/05_nas_layer_importance.sh
+WORKFLOW_BACKEND=qwen bash workflow_steps/06_mip_topk_configs.sh
 ```
 
 默认候选：
@@ -165,7 +174,16 @@ selected=L0:linear_attn
 
 ```bash
 cd /root/autodl-tmp/PUZZLE
-bash workflow_steps/06_search_llm_all_attention.sh
+WORKFLOW_BACKEND=qwen \
+MODEL_ID=Qwen/Qwen3-0.6B \
+DEVICE=gpu \
+PROMPT_SOURCE=mmlu \
+MODEL_VARIANTS=parent,skip_attn,skip_mlp,skip_both,all_attention \
+MAX_LAYERS=1 \
+MAX_PROMPTS=2 \
+bash workflow_steps/04_bld_block_library.sh
+WORKFLOW_BACKEND=qwen bash workflow_steps/05_nas_layer_importance.sh
+WORKFLOW_BACKEND=qwen bash workflow_steps/06_mip_topk_configs.sh
 ```
 
 后台运行时使用的日志：
@@ -207,7 +225,7 @@ fla_moba_attn
 
 ```bash
 cd /root/autodl-tmp/PUZZLE
-bash workflow_steps/07_summarize_results.sh
+WORKFLOW_BACKEND=qwen bash workflow_steps/07_assemble_model_from_config.sh
 ```
 
 关键输出：

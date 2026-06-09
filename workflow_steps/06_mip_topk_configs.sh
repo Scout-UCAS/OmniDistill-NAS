@@ -15,14 +15,27 @@ BATCH_SIZES="${BATCH_SIZES:-1,2,4}"
 MEMORY_FRACTION="${MEMORY_FRACTION:-0.82}"
 RUNTIME_FRACTION="${RUNTIME_FRACTION:-0.82}"
 DIVERSITY_ALPHA="${DIVERSITY_ALPHA:-0.75}"
+WORKFLOW_BACKEND="${WORKFLOW_BACKEND:-toy}"
 
 print_step "Step 6: MIP search for top-K architecture configs"
-run_python scripts/run_staged_toy_pipeline.py mip \
-  --scores-json "${NAS_IMPORTANCE_JSON}" \
-  --output-json "${MIP_TOPK_JSON}" \
-  --config-dir "${MIP_CONFIG_DIR}" \
-  --top-k "${TOP_K}" \
-  --batch-sizes "${BATCH_SIZES}" \
-  --memory-fraction "${MEMORY_FRACTION}" \
-  --runtime-fraction "${RUNTIME_FRACTION}" \
-  --diversity-alpha "${DIVERSITY_ALPHA}"
+if is_real_workflow_backend; then
+  run_python scripts/run_staged_model_pipeline.py mip \
+    --scores-json "${NAS_IMPORTANCE_JSON}" \
+    --output-json "${MIP_TOPK_JSON}" \
+    --config-dir "${MIP_CONFIG_DIR}" \
+    --top-k "${TOP_K}" \
+    --batch-sizes "${BATCH_SIZES}" \
+    --memory-fraction "${MEMORY_FRACTION}" \
+    --runtime-fraction "${RUNTIME_FRACTION}" \
+    --diversity-alpha "${DIVERSITY_ALPHA}"
+else
+  run_python scripts/run_staged_toy_pipeline.py mip \
+    --scores-json "${NAS_IMPORTANCE_JSON}" \
+    --output-json "${MIP_TOPK_JSON}" \
+    --config-dir "${MIP_CONFIG_DIR}" \
+    --top-k "${TOP_K}" \
+    --batch-sizes "${BATCH_SIZES}" \
+    --memory-fraction "${MEMORY_FRACTION}" \
+    --runtime-fraction "${RUNTIME_FRACTION}" \
+    --diversity-alpha "${DIVERSITY_ALPHA}"
+fi

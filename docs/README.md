@@ -6,8 +6,10 @@ This repository contains **OmniDistill-NAS**, a compact, runnable implementation
 from [`distillation_nas_paper.pdf`](../distillation_nas_paper.pdf): **Distillation-Based NAS for
 Inference-Optimized LLMs**.
 
-The implementation is intentionally small enough to run locally, while keeping
-the same stages as the paper:
+The implementation keeps the same stages as the paper and exposes two
+backends: a tiny causal Transformer for fast local checks, and a Qwen-style
+LLM/VLM/VLA backend for real staged BLD, NAS scoring, MIP, assembly, and
+GKD/OPD runs:
 
 1. Build a block library from attention and FFN alternatives.
 2. Initialize alternatives with training-free transformations.
@@ -19,8 +21,7 @@ the same stages as the paper:
    logits KL loss, and optionally add on-policy distillation (OPD).
 
 The paper uses large Llama/Nemotron models and target-hardware measurements.
-This repo provides the same algorithmic pipeline on a small causal Transformer,
-plus modular code that can be adapted to larger model wrappers.
+This repo provides a tiny reference path plus real Qwen-style model wrappers.
 
 ## Quick run
 
@@ -33,6 +34,13 @@ includes the device, number of generated block candidates, a selected
 architecture, total score, memory, runtime, and throughput estimate.
 
 For the staged shell workflow, see [workflow_steps.md](workflow_steps.md).
+
+Real Qwen-style staged workflow:
+
+```bash
+WORKFLOW_BACKEND=qwen MODEL_ID=Qwen/Qwen3-0.6B DEVICE=gpu \
+bash workflow_steps/run_all.sh
+```
 
 ## Verify
 
@@ -60,7 +68,8 @@ python3 -m unittest discover -s test_suite
 ## GKD With Optional OPD
 
 `global_knowledge_distillation` keeps the original offline GKD objective by
-default. To add OPD, pass a positive `opd_weight` and `opd_max_new_tokens`.
+default. To add token OPD, pass a positive `opd_weight` and
+`opd_max_new_tokens`; each batch must provide `input_ids`.
 The student samples continuations from its current policy; the teacher then
 scores those sampled tokens, and the extra loss is the sampled reverse-KL term
 `log p_student(token) - log p_teacher(token)` on generated tokens.
@@ -81,7 +90,11 @@ losses = global_knowledge_distillation(
 )
 ```
 
-This follows the on-policy distillation idea described by Thinking Machines:
+VLA action-space OPD is also supported: action logits use sampled reverse KL,
+and continuous action predictions use action MSE as an action-space
+distillation approximation. Continuous-action support does not perform an
+environment rollout. These paths follow the on-policy distillation idea
+described by Thinking Machines:
 https://thinkingmachines.ai/blog/on-policy-distillation/
 
 ## Attention Candidates
@@ -105,6 +118,24 @@ The toy demo defaults to `--attention-variants all_attention` and
 narrow the search.
 
 ## Qwen3-0.6B Example
+
+The recommended staged path is:
+
+```bash
+WORKFLOW_BACKEND=qwen \
+MODEL_ID=Qwen/Qwen3-0.6B \
+DEVICE=gpu \
+MODEL_VARIANTS=parent,skip_attn,skip_mlp,skip_both,all_core_attn,all_fla \
+MAX_LAYERS=2 \
+MAX_PROMPTS=2 \
+bash workflow_steps/run_all.sh
+```
+
+Stages 04-08 write `block_library.pth`, `layer_importance.json`, top-K configs,
+`assembled_model.pth`, and `gkd_model.pth`. Assembly and GKD save delta
+checkpoints by default: model ID, selected architecture config, and replacement
+layer weights. Set `SAVE_FULL_STATE_DICT=1` only when you intentionally want a
+full model state dict.
 
 `scripts/run_qwen3_attention_search.py` runs a real-model NAS candidate
 search on `Qwen/Qwen3-0.6B`:

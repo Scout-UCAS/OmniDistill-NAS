@@ -11,6 +11,7 @@ from torch import nn
 from PIL import Image
 
 from scripts.run_qwen3_attention_search import (
+    COMMON_DATASET_ALIASES,
     DatasetSpec,
     ScoreTarget,
     built_in_examples,
@@ -164,6 +165,27 @@ class QwenVlmHelperTest(unittest.TestCase):
         self.assertTrue(str(vlm.image).endswith("/tmp/images/frame.png"))
         self.assertIn("vision-language-action", vla.prompt)
         self.assertIn("0.1", vla.prompt)
+
+    def test_common_dataset_aliases_have_supported_formatter_paths(self) -> None:
+        self.assertGreater(len(COMMON_DATASET_ALIASES), 0)
+        synthetic = {
+            "llm": {"question": "2 + 2?", "choices": ["3", "4"], "answer": "4"},
+            "vlm": {"question": "What color is the block?", "image": "frame.png", "answer": "red"},
+            "vla": {"instruction": "pick up the red block", "image": "frame.png", "action": [0.0, 0.1]},
+        }
+        for alias, (task, dataset_name, config_name, split) in COMMON_DATASET_ALIASES.items():
+            with self.subTest(alias=alias):
+                self.assertIn(task, {"llm", "vlm", "vla"})
+                self.assertIsInstance(split, str)
+                if dataset_name is not None:
+                    self.assertIsInstance(dataset_name, str)
+                task_example = format_dataset_example(
+                    synthetic[task],
+                    DatasetSpec(alias, task, dataset_name, config_name, split),
+                    image_root="/tmp/images",
+                    include_target=False,
+                )
+                self.assertTrue(task_example.prompt.strip())
 
     def test_nested_and_bytes_images_are_decoded(self) -> None:
         buffer = BytesIO()

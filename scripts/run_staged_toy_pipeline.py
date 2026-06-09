@@ -70,7 +70,7 @@ def save_pth(path: str | Path, payload: dict[str, Any]) -> Path:
 def load_pth(path: str | Path) -> dict[str, Any]:
     resolved = resolve_path(path)
     try:
-        return torch.load(resolved, map_location="cpu", weights_only=False)
+        return torch.load(resolved, map_location="cpu", weights_only=True)
     except TypeError:
         return torch.load(resolved, map_location="cpu")
 
