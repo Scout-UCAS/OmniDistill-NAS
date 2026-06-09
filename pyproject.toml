@@ -1,0 +1,13 @@
+[project]
+name = "omnidistill-nas"
+version = "0.1.0"
+description = "OmniDistill-NAS: distillation-based architecture search for LLM/VLM/VLA inference experiments."
+requires-python = ">=3.10"
+dependencies = [
+  "numpy",
+  "scipy",
+  "torch",
+]
+
+[tool.setuptools.packages.find]
+include = ["distill_nas_core*"]

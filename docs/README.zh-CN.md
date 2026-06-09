@@ -1,0 +1,370 @@
+# OmniDistill-NAS
+
+本仓库是 **OmniDistill-NAS**，根据 [`distillation_nas_paper.pdf`](../distillation_nas_paper.pdf) 中的论文 **Distillation-Based NAS for Inference-Optimized LLMs** 实现了一个轻量、可本地运行的蒸馏式架构搜索框架。
+
+论文原方法面向 Llama/Nemotron 等大模型，并依赖真实硬件上的推理 profiling 数据。本实现保留论文的核心算法流程，用一个小型 causal Transformer 跑通完整 pipeline，便于理解、实验和后续迁移到更大的模型封装上。
+
+## 实现内容
+
+当前实现覆盖论文中的主要阶段：
+
+1. 构建 attention 和 FFN 的候选 block library。
+2. 使用训练前初始化方法生成候选子模块。
+3. 使用归一化 MSE 进行 Blockwise Local Distillation，也就是 BLD。
+4. 使用 replace-1-block KL divergence 或 LM loss 给候选块打分。
+5. 估计参数内存、KV-cache 内存和 runtime 成本。
+6. 使用 MILP 求解“每层选择一个候选块”的多约束架构搜索问题。
+7. 可选执行 Global Knowledge Distillation，也就是 GKD，loss 为 hidden cosine loss 加 logits KL loss，并可额外加入 OPD。
+
+## 快速运行
+
+```bash
+python3 scripts/run_tiny_nas.py --quick
+```
+
+示例会在可用时自动选择 CUDA 或 MPS。运行后会输出：
+
+- 当前使用的 device
+- 生成的候选 block 数量
+- MIP 选择的 batch size
+- 架构总 KL 分数
+- 总内存估计
+- runtime/throughput proxy
+- 每一层最终选择的候选块
+
+示例输出类似：
+
+```text
+generated_candidates=32
+device=mps
+selected_batch_size=1
+total_kl_score=0.000358
+total_memory_bytes=34176
+total_runtime_proxy=0.00024269
+throughput_proxy=65928.27
+architecture:
+  L0:parent_attn+ffn_50 score=0.000169
+  L1:parent_attn+ffn_50 score=0.000189
+```
+
+## 验证
+
+```bash
+python3 -m compileall distill_nas_core scripts test_suite
+python3 -m unittest discover -s test_suite
+```
+
+如果不希望生成 `__pycache__`，可以使用：
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s test_suite
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/run_tiny_nas.py --quick
+```
+
+## 分步脚本
+
+完整流程拆在 `workflow_steps/` 下，每一步都有独立的 `.sh` 文件；04-08
+按照论文阶段组织为 BLD、NAS 打分、MIP、组装和 GKD。更详细的脚本清单和
+输出位置见 [workflow_steps.md](workflow_steps.md)：
+
+```bash
+bash workflow_steps/01_prepare_environment.sh
+bash workflow_steps/02_validate_project.sh
+bash workflow_steps/03_smoke_tiny_nas.sh
+bash workflow_steps/04_bld_block_library.sh
+bash workflow_steps/05_nas_layer_importance.sh
+bash workflow_steps/06_mip_topk_configs.sh
+bash workflow_steps/07_assemble_model_from_config.sh
+bash workflow_steps/08_gkd_distill.sh
+```
+
+也可以直接运行：
+
+```bash
+bash workflow_steps/run_all.sh
+```
+
+常用覆盖参数示例：
+
+```bash
+TOP_K=5 CONFIG_RANK=1 GKD_STEPS=20 bash workflow_steps/run_all.sh
+```
+
+## 主要模块
+
+- `distill_nas_core.blocks`：小型 causal attention、FFN、no-op/linear 子模块和 Transformer block。
+- `distill_nas_core.search_space`：NAS 搜索空间定义，以及 MHA、MQA、GQA、MFA、MLA、MKA、linear attention、FFN pruning、linear FFN、no-op 的初始化。
+- `distill_nas_core.library`：coupled BLD 和 decoupled BLD 的 block library 构建。
+- `distill_nas_core.distill`：BLD/GKD/可选 OPD 的 loss 和训练循环。
+- `distill_nas_core.scoring`：replace-1-block KL divergence 和 LM loss 打分。
+- `distill_nas_core.resources`：参数内存、KV-cache 内存、runtime profiling/估计。
+- `distill_nas_core.mip`：混合整数规划架构搜索，包含 diversity constraint 和小规模 exhaustive fallback。
+- `distill_nas_core.toy`：用于 demo 的小型 causal language model。
+
+## 与论文的对应关系
+
+论文中的 NAS 框架由三大阶段组成：
+
+1. **Crafting puzzle pieces**：对每个 block 的候选 attention/FFN 子模块进行 BLD，形成 block library。
+2. **Assembling puzzle architecture**：根据 block quality score、runtime、memory、KV-cache 等约束，用 MIP 组装最终架构。
+3. **Uptraining**：用 GKD 进行端到端蒸馏，改善不同 block 组合后的兼容性。
+
+本实现中对应关系如下：
+
+- 阶段 1：`distill_nas_core.library`、`distill_nas_core.distill.local_distill_block`
+- 阶段 2：`distill_nas_core.scoring`、`distill_nas_core.resources`、`distill_nas_core.mip`
+- 阶段 3：`distill_nas_core.distill.global_knowledge_distillation`
+
+## GKD 中加入 OPD
+
+`global_knowledge_distillation` 默认仍然使用原来的离线 GKD，也就是 teacher/student 在同一批 token 上计算 logits KL 和 hidden cosine loss。需要启用 OPD 时，传入正数 `opd_weight`，并设置 `opd_max_new_tokens`。
+
+OPD 的流程是：先让 student 用当前策略从 prompt 继续采样，再让 teacher 和 student 对这些 student 生成的 token 计算 log-prob，额外优化 sampled reverse-KL：
+
+```text
+log p_student(token) - log p_teacher(token)
+```
+
+用法示例：
+
+```python
+from distill_nas_core.distill import global_knowledge_distillation
+
+losses = global_knowledge_distillation(
+    teacher,
+    student,
+    prompt_batches,
+    steps=100,
+    lr=1e-4,
+    opd_weight=0.25,
+    opd_max_new_tokens=32,
+    opd_temperature=1.0,
+    opd_top_k=50,
+)
+```
+
+该实现参考了 Thinking Machines 的 on-policy distillation 思路：https://thinkingmachines.ai/blog/on-policy-distillation/
+
+## Attention 候选
+
+toy distillation NAS pipeline 中的 layer 级候选包含：
+
+```text
+parent
+skip_attn
+skip_mlp
+skip_both
+```
+
+attention 候选包含：
+
+```text
+parent_attn
+mha_attn
+quant_mha_attn
+mqa_attn
+gqa_kv*
+mfa_attn / mfa_kv*
+mla_attn / mla_kv*
+mka_attn
+linear_attn
+noop_attn
+fla_linear_attn
+fla_gated_linear_attn
+fla_based_linear_attn
+fla_rebased_linear_attn
+fla_deltanet_attn
+fla_gated_deltanet_attn
+fla_kimi_delta_attn
+fla_multiscale_retention_attn
+fla_mla_attn
+fla_native_sparse_attn
+fla_moba_attn
+```
+
+其中 MHA/MQA/GQA 通过调整 `num_kv_heads` 实现；`quant_mha_attn` 使用 int8 对称量化后的 MHA 投影权重；MFA 使用分组低秩 K/V 投影；MLA 使用共享 latent 重建 K/V；MKA 使用共享 Key 和低秩 Value。FLA 名称在通用 toy pipeline 中对应轻量 PyTorch 等价候选，包括 kernel linear attention、gated linear attention、retention 和局部稀疏 attention，因此也会真实 forward，并作为 `AttentionSpec` 进入 BLD、replace-1-block 评分和 MIP 搜索。`all_linear_attn` 会展开为 `linear_attn` 以及 FLA 的 linear/delta family，`all_core_attn` 会把这些 linear attention 与 MHA/MQA/GQA/MFA/MLA/MKA 放在同一层级。`scripts/run_tiny_nas.py` 默认使用 `--attention-variants all_attention` 和 `--layer-variants parent,skip_attn,skip_mlp,skip_both`，也可以改成 `all_qwen_attn`、`all_linear_attn`、`all_core_attn`、`all_fla` 或逗号分隔的候选名。
+
+## 注意事项
+
+本仓库没有内置 Llama/Nemotron 权重、真实训练语料或 H100/4090 的硬件测量数据。因此默认 demo 使用 toy model 和 runtime proxy。要迁移到真实 LLM，需要补充：
+
+- 模型 block 的适配层
+- 真实 token 数据
+- 目标硬件上的 block runtime 测量
+- 对应推理引擎的非均匀 block 支持
+
+## Qwen3-0.6B 真实模型示例
+
+`scripts/run_qwen3_attention_search.py` 会加载 HuggingFace 上的 `Qwen/Qwen3-0.6B`，在 GPU 上对若干 Transformer 层执行 NAS 候选搜索：
+
+```bash
+python3 scripts/run_qwen3_attention_search.py \
+  --model-id Qwen/Qwen3-0.6B \
+  --device gpu \
+  --max-layers 8 \
+  --max-prompts 2 \
+  --seq-len 128
+```
+
+该示例会实际计算 replace-1-layer KL 分数，然后用 MIP 在真实 Qwen attention 候选、skip 候选和 FLA 候选中为每个搜索层选择一个候选。`all_qwen_attn` 会展开为：
+
+```text
+parent_attn
+mha_attn
+quant_mha_attn
+mqa_attn
+gqa_kv2
+mfa_kv2
+mla_kv2
+mka_attn
+linear_attn
+noop_attn
+```
+
+`all_linear_attn` 会展开为：
+
+```text
+linear_attn
+fla_linear_attn
+fla_gated_linear_attn
+fla_based_linear_attn
+fla_rebased_linear_attn
+fla_deltanet_attn
+fla_gated_deltanet_attn
+fla_kimi_delta_attn
+```
+
+`all_fla` 会展开为：
+
+```text
+fla_linear_attn
+fla_gated_linear_attn
+fla_based_linear_attn
+fla_rebased_linear_attn
+fla_deltanet_attn
+fla_gated_deltanet_attn
+fla_kimi_delta_attn
+fla_multiscale_retention_attn
+fla_mla_attn
+fla_native_sparse_attn
+fla_moba_attn
+```
+
+其中 MHA/量化 MHA/MQA/GQA/MFA/MLA/MKA/linear/no-op 候选均已在 Qwen decoder layer 中真实 forward，并尽量复用原 Qwen attention 的 q/k/v/o、q/k norm 和 RoPE。FLA 候选也会替换原始 self-attention，并尽量用原 Qwen attention 的 q/k/v/o 权重初始化。当前环境缺少某个 FLA 类或 CUDA 依赖时默认跳过该候选；如需严格失败，可加 `--no-skip-unavailable-fla`。结果默认写入：
+
+```text
+outputs/qwen3_0_6b_layer_skip_search.json
+checkpoints/qwen3_0_6b_layer_skip_search.pth
+```
+
+模型权重缓存默认位于项目目录下的 `hf_cache/models`。本地安装的 `transformers` 等依赖可放在 `vendor/python`，脚本会优先从该目录导入。
+
+如需显式指定候选集合：
+
+```bash
+python3 scripts/run_qwen3_attention_search.py \
+  --variants parent,skip_attn,skip_mlp,skip_both,all_core_attn,all_fla
+```
+
+也可以用 MMLU 小样本作为真实输入数据进行 smoke test。该路径需要可选依赖 `datasets`，数据集缓存默认写入 `hf_cache/datasets`：
+
+```bash
+python3 scripts/run_qwen3_attention_search.py \
+  --model-id Qwen/Qwen3-0.6B \
+  --device gpu \
+  --prompt-source mmlu \
+  --mmlu-dataset cais/mmlu \
+  --mmlu-subject abstract_algebra \
+  --mmlu-split test \
+  --max-prompts 2 \
+  --max-layers 1 \
+  --seq-len 256 \
+  --variants parent,parent_attn,mha_attn,quant_mha_attn,mqa_attn,gqa_kv2,mfa_kv2,mla_kv2,mka_attn,all_linear_attn,noop_attn
+```
+
+## VLM 支持
+
+同一个真实模型脚本也支持 Qwen 风格 VLM，例如 Qwen3-VL。使用
+`--model-kind vlm` 时，脚本会用 `AutoProcessor` 和
+`AutoModelForImageTextToText` 加载模型，并自动定位 VLM 外层封装里的
+language decoder layers。NAS 候选只替换语言解码器层，vision encoder 和
+multimodal projector 保持原样。
+
+内置 smoke prompt 在不传 `--image-path` 时会自动生成一张空白 RGB 图片；
+数据集模式默认要求样本里有真实图片字段，只有显式传 `--allow-blank-image`
+时才允许缺图 fallback。如果要使用真实图片，可以传单个路径或逗号分隔的多个路径。
+Qwen3-VL 需要 transformers 能识别 `qwen3_vl` 架构，`workflow_steps/01_prepare_environment.sh`
+会在当前版本过低时把 `transformers>=4.57,<5` 和 `pillow` 安装到
+`vendor/python`：
+
+```bash
+python3 scripts/run_qwen3_attention_search.py \
+  --model-id Qwen/Qwen3-VL-2B-Instruct \
+  --model-kind vlm \
+  --device gpu \
+  --max-prompts 1 \
+  --max-layers 1 \
+  --seq-len 512 \
+  --variants parent,parent_attn,mha_attn,quant_mha_attn,mqa_attn,linear_attn,noop_attn \
+  --output outputs/qwen3_vl_attention_smoke.json \
+  --pth-output checkpoints/qwen3_vl_attention_smoke.pth
+```
+
+如果你的环境中已经有 `Qwen3-VL-0.6B` 或其他更小的 VLM checkpoint，只需要把
+`--model-id` 换成对应路径或 HuggingFace id 即可。
+
+## VLA 支持和常用数据集
+
+真实模型脚本现在也支持 `--model-kind vla`，面向 OpenVLA 这类
+Vision-Language-Action 模型。VLA 路径和 VLM 一样，会用 `AutoProcessor`
+加多模态模型加载器，并自动定位语言 decoder layers；NAS 候选只替换语言解码器，
+vision encoder、multimodal projector/action head 保持不变。
+评分时会优先使用 teacher/student 的动作输出：`action_logits` 用 KL，
+连续 `actions` 或 `predicted_actions` 用 MSE；如果模型只暴露普通
+`logits`，则退回到语言 logits KL。
+
+```bash
+python3 scripts/run_qwen3_attention_search.py \
+  --model-id openvla/openvla-7b \
+  --model-kind vla \
+  --prompt-source built_in \
+  --max-prompts 1 \
+  --max-layers 1 \
+  --seq-len 512 \
+  --variants parent,parent_attn,mha_attn,quant_mha_attn,mqa_attn,linear_attn,noop_attn \
+  --output outputs/openvla_attention_smoke.json \
+  --pth-output checkpoints/openvla_attention_smoke.pth
+```
+
+内置常用数据集别名分三类：
+
+- LLM：`mmlu`、`mmlu_pro`、`hellaswag`、`arc_challenge`、`arc_easy`、`gsm8k`、`boolq`、`winogrande`、`truthfulqa`
+- VLM：`vqav2`、`okvqa`、`gqa`、`textvqa`、`scienceqa`、`vizwiz`、`coco_caption`
+- VLA：`libero`、`lerobot_libero`、`lerobot_pusht`、`aloha_transfer_cube`、`aloha_insertion`，以及 `bridge_v2`、`rt1`、`open_x_embodiment`、`droid` 这类数据集家族别名；后几类公开托管不统一，需要额外传 `--dataset-name` 或 `--dataset-path`
+
+通用 HuggingFace 数据集或本地 JSON/JSONL/CSV/Parquet 也可以使用：
+
+```bash
+python3 scripts/run_qwen3_attention_search.py \
+  --model-id Qwen/Qwen3-VL-2B-Instruct \
+  --model-kind vlm \
+  --prompt-source dataset \
+  --dataset-name lmms-lab/TextVQA \
+  --dataset-split validation \
+  --dataset-task vlm \
+  --max-prompts 2
+```
+
+本地 VLA 数据建议包含 `instruction`、`image_path`、`action` 等字段，图片字段
+可以是嵌套结构、路径或 byte 编码；数据集样本缺图时默认会报错，然后传入：
+
+```bash
+python3 scripts/run_qwen3_attention_search.py \
+  --model-id openvla/openvla-7b \
+  --model-kind vla \
+  --prompt-source dataset \
+  --dataset-path data/robot_samples.jsonl \
+  --dataset-task vla \
+  --dataset-image-root data/images \
+  --max-prompts 2
+```

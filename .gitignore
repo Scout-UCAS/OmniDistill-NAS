@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments and vendored dependencies
+.venv/
+venv/
+vendor/python/
+
+# Model/data caches and generated artifacts
+hf_cache/
+outputs/
+checkpoints/
+.cache/
+
+# Large external source checkouts
+vendor/flash-linear-attention/
+vendor/flash-linear-attention-v0.4.2/
+
+# Local environment files
+.env
+.env.*
+
+# macOS/editor
+.DS_Store
+.idea/
+.vscode/
