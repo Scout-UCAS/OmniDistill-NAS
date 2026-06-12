@@ -27,7 +27,7 @@ if is_real_workflow_backend; then
   if [[ "${NO_SKIP_UNAVAILABLE_FLA:-0}" =~ ^(1|true|yes|on)$ ]]; then
     MODEL_SEARCH_ARGS+=(--no-skip-unavailable-fla)
   fi
-  run_python scripts/run_staged_model_pipeline.py bld \
+  run_python tools/run_staged_model_pipeline.py bld \
     "${MODEL_ARGS[@]}" \
     --max-layers "${MAX_LAYERS}" \
     --layer-stride "${LAYER_STRIDE}" \
@@ -42,7 +42,7 @@ if is_real_workflow_backend; then
 else
   BLD_STEPS="${BLD_STEPS:-1}"
   TOY_SEQ_LEN="${SEQ_LEN:-16}"
-  run_python scripts/run_staged_toy_pipeline.py bld \
+  run_python tools/run_staged_toy_pipeline.py bld \
     --device "${DEVICE}" \
     --seq-len "${TOY_SEQ_LEN}" \
     --batch-size "${BATCH_SIZE}" \

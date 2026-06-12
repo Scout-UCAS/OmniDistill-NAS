@@ -19,7 +19,7 @@
 ## 快速运行
 
 ```bash
-python3 scripts/run_tiny_nas.py --quick
+python3 tools/run_tiny_nas.py --quick
 ```
 
 示例会在可用时自动选择 CUDA 或 MPS。运行后会输出：
@@ -50,39 +50,63 @@ architecture:
 ## 验证
 
 ```bash
-python3 -m compileall distill_nas_core scripts test_suite
-python3 -m unittest discover -s test_suite
+python3 -m compileall distill_nas_core scripts tools tests
+python3 -m unittest discover -s tests
+```
+
+贡献前的本地 CI 检查可以直接运行：
+
+```bash
+python3 tools/check_project.py
 ```
 
 如果不希望生成 `__pycache__`，可以使用：
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s test_suite
-PYTHONDONTWRITEBYTECODE=1 python3 scripts/run_tiny_nas.py --quick
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests
+PYTHONDONTWRITEBYTECODE=1 python3 tools/run_tiny_nas.py --quick
 ```
 
 ## 分步脚本
 
-完整流程拆在 `workflow_steps/` 下，每一步都有独立的 `.sh` 文件；04-08
+完整流程拆在 `scripts/` 下，每一步都有独立的 `.sh` 文件；04-08
 按照论文阶段组织为 BLD、NAS 打分、MIP、组装和 GKD。更详细的脚本清单和
-输出位置见 [workflow_steps.md](workflow_steps.md)：
+输出位置见 [scripts.md](scripts.md)：
 
 ```bash
-bash workflow_steps/01_prepare_environment.sh
-bash workflow_steps/02_validate_project.sh
-bash workflow_steps/03_smoke_tiny_nas.sh
-bash workflow_steps/04_bld_block_library.sh
-bash workflow_steps/05_nas_layer_importance.sh
-bash workflow_steps/06_mip_topk_configs.sh
-bash workflow_steps/07_assemble_model_from_config.sh
-bash workflow_steps/08_gkd_distill.sh
+bash scripts/01_prepare_environment.sh
+bash scripts/02_validate_project.sh
+bash scripts/03_smoke_tiny_nas.sh
+bash scripts/04_bld_block_library.sh
+bash scripts/05_nas_layer_importance.sh
+bash scripts/06_mip_topk_configs.sh
+bash scripts/07_assemble_model_from_config.sh
+bash scripts/08_gkd_distill.sh
 ```
 
 也可以直接运行：
 
 ```bash
-bash workflow_steps/run_all.sh
+bash scripts/run_all.sh
 ```
+
+## 平台化实验入口
+
+除了 shell 脚本，现在也可以用 JSON/YAML 实验配置运行，并自动跳过已经存在的
+阶段产物：
+
+```bash
+python3 tools/run_experiment.py --config configs/toy_experiment.json
+python3 tools/run_experiment.py --config configs/toy_experiment.json --from-stage evaluate
+python3 tools/workflow_status.py --workflow-dir outputs/distill_nas_workflow
+```
+
+默认 toy 配置在 04-08 论文阶段后增加：
+
+- `evaluate`：输出 `09_evaluation/metrics.json`。
+- `profile`：输出 `10_profiling/profile.json`，包含实测 latency。
+- `export`：输出 `11_export/manifest.json` 和可移植 artifact。
+- `report`：输出 `report.md`。
 
 默认后端是 `toy`，适合快速检查。真实 Qwen/VLM/VLA 分阶段流程使用：
 
@@ -93,13 +117,13 @@ DEVICE=gpu \
 MODEL_VARIANTS=parent,skip_attn,skip_mlp,skip_both,all_core_attn \
 MAX_LAYERS=2 \
 MAX_PROMPTS=2 \
-bash workflow_steps/run_all.sh
+bash scripts/run_all.sh
 ```
 
 常用覆盖参数示例：
 
 ```bash
-TOP_K=5 CONFIG_RANK=1 GKD_STEPS=20 bash workflow_steps/run_all.sh
+TOP_K=5 CONFIG_RANK=1 GKD_STEPS=20 bash scripts/run_all.sh
 ```
 
 ## 主要模块
@@ -112,6 +136,33 @@ TOP_K=5 CONFIG_RANK=1 GKD_STEPS=20 bash workflow_steps/run_all.sh
 - `distill_nas_core.resources`：参数内存、KV-cache 内存、runtime profiling/估计。
 - `distill_nas_core.mip`：混合整数规划架构搜索，包含 diversity constraint 和小规模 exhaustive fallback。
 - `distill_nas_core.toy`：用于 demo 的小型 causal language model。
+- `distill_nas_core.experiment`：实验配置、resume/cache 和阶段执行。
+- `distill_nas_core.evaluation`、`profiler`、`export`、`reporting`：评测、实测 profiling、导出和报告生成。
+- `distill_nas_core.data_adapters`、`quantization`、`distributed`、`vla`：数据集、量化校准、设备计划和 VLA rollout 的扩展点。
+
+## 多目标搜索
+
+默认 MIP 仍然是“最小化候选 score，并把 memory/runtime 作为硬约束”。如果希望把
+内存和延迟也加入目标函数，可以使用 weighted 模式：
+
+```bash
+OBJECTIVE_MODE=weighted SCORE_WEIGHT=1.0 MEMORY_WEIGHT=0.25 RUNTIME_WEIGHT=0.25 \
+bash scripts/06_mip_topk_configs.sh
+```
+
+对应 CLI 参数是 `--objective-mode weighted --score-weight ... --memory-weight ...
+--runtime-weight ...`。默认会归一化 score、memory、runtime，避免不同单位的数值尺度直接主导结果。
+
+如果想一次性查看多组权重下的取舍空间，可以运行 Pareto sweep 报告：
+
+```bash
+python3 tools/run_multi_objective_search.py \
+  --scores-json outputs/distill_nas_workflow/05_nas_layer_scoring/layer_importance.json
+```
+
+该命令会输出 `multi_objective_search.json`、Pareto 架构配置、`multi_objective_report.md`
+和 `pareto_front.svg`。小规模搜索空间会精确枚举 Pareto 前沿，大规模空间会使用权重
+sweep 的非支配解作为近似前沿。
 
 ## 与论文的对应关系
 
@@ -196,7 +247,7 @@ fla_native_sparse_attn
 fla_moba_attn
 ```
 
-其中 MHA/MQA/GQA 通过调整 `num_kv_heads` 实现；`quant_mha_attn` 使用 int8 对称量化后的 MHA 投影权重；MFA 使用分组低秩 K/V 投影；MLA 使用共享 latent 重建 K/V；MKA 使用共享 Key 和低秩 Value。FLA 名称在通用 toy pipeline 中对应轻量 PyTorch 等价候选，包括 kernel linear attention、gated linear attention、retention 和局部稀疏 attention，因此也会真实 forward，并作为 `AttentionSpec` 进入 BLD、replace-1-block 评分和 MIP 搜索。`all_linear_attn` 会展开为 `linear_attn` 以及 FLA 的 linear/delta family，`all_core_attn` 会把这些 linear attention 与 MHA/MQA/GQA/MFA/MLA/MKA 放在同一层级。`scripts/run_tiny_nas.py` 默认使用 `--attention-variants all_attention` 和 `--layer-variants parent,skip_attn,skip_mlp,skip_both`，也可以改成 `all_qwen_attn`、`all_linear_attn`、`all_core_attn`、`all_fla` 或逗号分隔的候选名。
+其中 MHA/MQA/GQA 通过调整 `num_kv_heads` 实现；`quant_mha_attn` 使用 int8 对称量化后的 MHA 投影权重；MFA 使用分组低秩 K/V 投影；MLA 使用共享 latent 重建 K/V；MKA 使用共享 Key 和低秩 Value。FLA 名称在通用 toy pipeline 中对应轻量 PyTorch 等价候选，包括 kernel linear attention、gated linear attention、retention 和局部稀疏 attention，因此也会真实 forward，并作为 `AttentionSpec` 进入 BLD、replace-1-block 评分和 MIP 搜索。`all_linear_attn` 会展开为 `linear_attn` 以及 FLA 的 linear/delta family，`all_core_attn` 会把这些 linear attention 与 MHA/MQA/GQA/MFA/MLA/MKA 放在同一层级。`tools/run_tiny_nas.py` 默认使用 `--attention-variants all_attention` 和 `--layer-variants parent,skip_attn,skip_mlp,skip_both`，也可以改成 `all_qwen_attn`、`all_linear_attn`、`all_core_attn`、`all_fla` 或逗号分隔的候选名。
 
 ## 注意事项
 
@@ -218,15 +269,15 @@ DEVICE=gpu \
 MODEL_VARIANTS=parent,skip_attn,skip_mlp,skip_both,all_core_attn,all_fla \
 MAX_LAYERS=2 \
 MAX_PROMPTS=2 \
-bash workflow_steps/run_all.sh
+bash scripts/run_all.sh
 ```
 
-04-08 会分别输出 `block_library.pth`、`layer_importance.json`、top-K config、`assembled_model.pth` 和 `gkd_model.pth`。默认保存的是 delta checkpoint：模型 ID、架构 config 和候选替换层权重；只有设置 `SAVE_FULL_STATE_DICT=1` 时才保存完整模型 state dict。
+04-08 会分别输出 `block_library.pth`、`layer_importance.json`、top-K config、`assembled_model.pth` 和 `gkd_model.pth`。默认保存的是 delta checkpoint：模型 ID、架构 config 和候选替换层权重。checkpoint 恢复默认严格校验 key；只有明确需要跨候选定义加载旧权重时，才设置 `ALLOW_PARTIAL_CHECKPOINT_LOAD=1`。只有设置 `SAVE_FULL_STATE_DICT=1` 时才保存完整模型 state dict。
 
-`scripts/run_qwen3_attention_search.py` 会加载 HuggingFace 上的 `Qwen/Qwen3-0.6B`，在 GPU 上对若干 Transformer 层执行 NAS 候选搜索：
+`tools/run_qwen3_attention_search.py` 会加载 HuggingFace 上的 `Qwen/Qwen3-0.6B`，在 GPU 上对若干 Transformer 层执行 NAS 候选搜索：
 
 ```bash
-python3 scripts/run_qwen3_attention_search.py \
+python3 tools/run_qwen3_attention_search.py \
   --model-id Qwen/Qwen3-0.6B \
   --device gpu \
   --max-layers 8 \
@@ -278,7 +329,7 @@ fla_native_sparse_attn
 fla_moba_attn
 ```
 
-其中 MHA/量化 MHA/MQA/GQA/MFA/MLA/MKA/linear/no-op 候选均已在 Qwen decoder layer 中真实 forward，并尽量复用原 Qwen attention 的 q/k/v/o、q/k norm 和 RoPE。FLA 候选也会替换原始 self-attention，并尽量用原 Qwen attention 的 q/k/v/o 权重初始化。当前环境缺少某个 FLA 类或 CUDA 依赖时默认跳过该候选；如需严格失败，可加 `--no-skip-unavailable-fla`。结果默认写入：
+其中 MHA/量化 MHA/MQA/GQA/MFA/MLA/MKA/linear/no-op 候选均已在 Qwen decoder layer 中真实 forward，并尽量复用原 Qwen attention 的 q/k/v/o、q/k norm 和 RoPE。FLA 候选也会替换原始 self-attention，并尽量用原 Qwen attention 的 q/k/v/o 权重初始化。`scripts/01_prepare_environment.sh` 在 Linux GPU 环境下会默认把 `fla-org/flash-linear-attention` clone 到 `vendor/flash-linear-attention`；如需跳过可设置 `INSTALL_FLA=0`，如需校验时强制要求 FLA 可设置 `REQUIRE_FLA=1`。当前环境缺少某个 FLA 类或 CUDA 依赖时默认跳过该候选；如需严格失败，可加 `--no-skip-unavailable-fla`。结果默认写入：
 
 ```text
 outputs/qwen3_0_6b_layer_skip_search.json
@@ -290,14 +341,14 @@ checkpoints/qwen3_0_6b_layer_skip_search.pth
 如需显式指定候选集合：
 
 ```bash
-python3 scripts/run_qwen3_attention_search.py \
+python3 tools/run_qwen3_attention_search.py \
   --variants parent,skip_attn,skip_mlp,skip_both,all_core_attn,all_fla
 ```
 
 也可以用 MMLU 小样本作为真实输入数据进行 smoke test。该路径需要可选依赖 `datasets`，数据集缓存默认写入 `hf_cache/datasets`：
 
 ```bash
-python3 scripts/run_qwen3_attention_search.py \
+python3 tools/run_qwen3_attention_search.py \
   --model-id Qwen/Qwen3-0.6B \
   --device gpu \
   --prompt-source mmlu \
@@ -321,12 +372,12 @@ multimodal projector 保持原样。
 内置 smoke prompt 在不传 `--image-path` 时会自动生成一张空白 RGB 图片；
 数据集模式默认要求样本里有真实图片字段，只有显式传 `--allow-blank-image`
 时才允许缺图 fallback。如果要使用真实图片，可以传单个路径或逗号分隔的多个路径。
-Qwen3-VL 需要 transformers 能识别 `qwen3_vl` 架构，`workflow_steps/01_prepare_environment.sh`
+Qwen3-VL 需要 transformers 能识别 `qwen3_vl` 架构，`scripts/01_prepare_environment.sh`
 会在当前版本过低时把 `transformers>=4.57,<5` 和 `pillow` 安装到
 `vendor/python`：
 
 ```bash
-python3 scripts/run_qwen3_attention_search.py \
+python3 tools/run_qwen3_attention_search.py \
   --model-id Qwen/Qwen3-VL-2B-Instruct \
   --model-kind vlm \
   --device gpu \
@@ -348,11 +399,10 @@ Vision-Language-Action 模型。VLA 路径和 VLM 一样，会用 `AutoProcessor
 加多模态模型加载器，并自动定位语言 decoder layers；NAS 候选只替换语言解码器，
 vision encoder、multimodal projector/action head 保持不变。
 评分时会优先使用 teacher/student 的动作输出：`action_logits` 用 KL，
-连续 `actions` 或 `predicted_actions` 用 MSE；如果模型只暴露普通
-`logits`，则退回到语言 logits KL。
+连续 `action_mean` 用 MSE，`actions` 或 `predicted_actions` 作为确定性动作值继续用 MSE；如果模型只暴露普通 `logits`，则退回到语言 logits KL。GKD/OPD 中，如果模型同时暴露 `action_mean` 和 `action_log_std`，连续动作会使用 student 采样动作上的 sampled reverse-KL；只有确定性动作张量时默认退回 MSE，设置 `STRICT_ACTION_OPD=1` 可禁止这种近似。VLA 本地数据中的数值 `action` 会作为 `actions` tensor 保存在 batch 里，`state`/`proprio` 会作为 `proprio` tensor 保留；不支持这些字段的普通 HF 模型会在 forward fallback 时自动过滤。
 
 ```bash
-python3 scripts/run_qwen3_attention_search.py \
+python3 tools/run_qwen3_attention_search.py \
   --model-id openvla/openvla-7b \
   --model-kind vla \
   --prompt-source built_in \
@@ -373,7 +423,7 @@ python3 scripts/run_qwen3_attention_search.py \
 通用 HuggingFace 数据集或本地 JSON/JSONL/CSV/Parquet 也可以使用：
 
 ```bash
-python3 scripts/run_qwen3_attention_search.py \
+python3 tools/run_qwen3_attention_search.py \
   --model-id Qwen/Qwen3-VL-2B-Instruct \
   --model-kind vlm \
   --prompt-source dataset \
@@ -387,7 +437,7 @@ python3 scripts/run_qwen3_attention_search.py \
 可以是嵌套结构、路径或 byte 编码；数据集样本缺图时默认会报错，然后传入：
 
 ```bash
-python3 scripts/run_qwen3_attention_search.py \
+python3 tools/run_qwen3_attention_search.py \
   --model-id openvla/openvla-7b \
   --model-kind vla \
   --prompt-source dataset \

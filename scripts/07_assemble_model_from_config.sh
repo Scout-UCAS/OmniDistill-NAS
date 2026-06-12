@@ -30,7 +30,10 @@ if is_real_workflow_backend; then
   if [[ "${SAVE_FULL_STATE_DICT:-0}" =~ ^(1|true|yes|on)$ ]]; then
     ASSEMBLE_ARGS+=(--save-full-state-dict)
   fi
-  run_python scripts/run_staged_model_pipeline.py assemble \
+  if [[ "${ALLOW_PARTIAL_CHECKPOINT_LOAD:-0}" =~ ^(1|true|yes|on)$ ]]; then
+    ASSEMBLE_ARGS+=(--allow-partial-checkpoint-load)
+  fi
+  run_python tools/run_staged_model_pipeline.py assemble \
     "${MODEL_ARGS[@]}" \
     --bld-pth "${BLD_OUTPUT_PTH}" \
     "${CONFIG_ARGS[@]}" \
@@ -38,7 +41,7 @@ if is_real_workflow_backend; then
     --summary-json "${ASSEMBLED_SUMMARY_JSON}" \
     "${ASSEMBLE_ARGS[@]}"
 else
-  run_python scripts/run_staged_toy_pipeline.py assemble \
+  run_python tools/run_staged_toy_pipeline.py assemble \
     --bld-pth "${BLD_OUTPUT_PTH}" \
     "${CONFIG_ARGS[@]}" \
     --output-pth "${ASSEMBLED_MODEL_PTH}" \

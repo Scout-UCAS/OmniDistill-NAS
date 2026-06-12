@@ -11,7 +11,7 @@ TOY_LAYER_VARIANTS="${TOY_LAYER_VARIANTS:-parent,skip_attn,skip_mlp,skip_both}"
 TOY_LOG="${TOY_LOG:-outputs/tiny_nas_quick.log}"
 
 print_step "Step 3: smoke test the tiny distillation NAS pipeline"
-run_python scripts/run_tiny_nas.py \
+run_python tools/run_tiny_nas.py \
   --quick \
   --bld-steps "${TOY_BLD_STEPS}" \
   --score-batches "${TOY_SCORE_BATCHES}" \

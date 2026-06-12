@@ -4,7 +4,7 @@
 
 ## 代码改动
 
-- `scripts/run_qwen3_attention_search.py` 新增 MMLU prompt source：
+- `tools/run_qwen3_attention_search.py` 新增 MMLU prompt source：
   - `--prompt-source mmlu`
   - `--mmlu-dataset`
   - `--mmlu-subject`
@@ -19,9 +19,9 @@
 ## 本地验证
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile scripts/run_qwen3_attention_search.py
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s test_suite
-PYTHONDONTWRITEBYTECODE=1 python3 scripts/run_qwen3_attention_search.py --help
+PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile tools/run_qwen3_attention_search.py
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests
+PYTHONDONTWRITEBYTECODE=1 python3 tools/run_qwen3_attention_search.py --help
 ```
 
 结果：
@@ -64,7 +64,7 @@ huggingface_hub 0.36.2
 HF_ENDPOINT=https://hf-mirror.com HF_HUB_DISABLE_XET=1 \
 PYTHONDONTWRITEBYTECODE=1 /root/miniconda3/bin/python - <<'PY'
 from pathlib import Path
-from scripts.run_qwen3_attention_search import load_mmlu_prompts
+from tools.run_qwen3_attention_search import load_mmlu_prompts
 prompts = load_mmlu_prompts("cais/mmlu", "abstract_algebra", "test", 1, Path("hf_cache/datasets"))
 print(len(prompts))
 print(prompts[0].splitlines()[2])
@@ -84,7 +84,7 @@ Question: Find the degree for the given field extension Q(sqrt(2), sqrt(3), sqrt
 
 ```bash
 HF_ENDPOINT=https://hf-mirror.com HF_HUB_DISABLE_XET=1 \
-PYTHONDONTWRITEBYTECODE=1 /root/miniconda3/bin/python scripts/run_qwen3_attention_search.py \
+PYTHONDONTWRITEBYTECODE=1 /root/miniconda3/bin/python tools/run_qwen3_attention_search.py \
   --model-id Qwen/Qwen3-0.6B \
   --device gpu \
   --dtype bf16 \
@@ -131,7 +131,7 @@ noop_attn
 
 ```bash
 HF_ENDPOINT=https://hf-mirror.com HF_HUB_DISABLE_XET=1 \
-PYTHONDONTWRITEBYTECODE=1 /root/miniconda3/bin/python scripts/run_qwen3_attention_search.py \
+PYTHONDONTWRITEBYTECODE=1 /root/miniconda3/bin/python tools/run_qwen3_attention_search.py \
   --model-id Qwen/Qwen3-0.6B \
   --device gpu \
   --dtype bf16 \

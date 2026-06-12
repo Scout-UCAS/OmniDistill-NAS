@@ -25,7 +25,15 @@ from distill_nas_core.search_space import (
     attention_specs_from_names,
     ffn_channel_contribution_order,
     layer_variant_specs_from_names,
-    make_block_variant,
+)
+from distill_nas_core.toy_assembly import (
+    assemble_student_from_bld,
+    block_key,
+    block_library_map,
+    build_parent_model,
+    config_from_dict,
+    reconstruct_block,
+    spec_from_dict,
 )
 from distill_nas_core.toy import (
     TinyCausalLM,
@@ -99,10 +107,6 @@ def make_tiny_config(quick: bool) -> TinyConfig:
     )
 
 
-def config_from_dict(raw: dict[str, Any]) -> TinyConfig:
-    return TinyConfig(**raw)
-
-
 def spec_to_dict(spec: BlockSpec) -> dict[str, Any]:
     return {
         "attention": asdict(spec.attention),
@@ -110,14 +114,6 @@ def spec_to_dict(spec: BlockSpec) -> dict[str, Any]:
         "alias": spec.alias,
         "name": spec.name,
     }
-
-
-def spec_from_dict(raw: dict[str, Any]) -> BlockSpec:
-    return BlockSpec(
-        attention=AttentionSpec(**raw["attention"]),
-        ffn=FFNSpec(**raw["ffn"]),
-        alias=raw.get("alias"),
-    )
 
 
 def ffn_specs() -> list[FFNSpec]:
@@ -148,12 +144,6 @@ def cpu_state_dict(module: torch.nn.Module) -> dict[str, torch.Tensor]:
     return {key: value.detach().cpu() for key, value in module.state_dict().items()}
 
 
-def build_parent_model(artifact: dict[str, Any]) -> TinyCausalLM:
-    model = TinyCausalLM(config_from_dict(artifact["config"]))
-    model.load_state_dict(artifact["parent_state_dict"])
-    return model
-
-
 def make_token_batches(artifact: dict[str, Any], count: int | None = None) -> list[torch.Tensor]:
     config = config_from_dict(artifact["config"])
     num_batches = count if count is not None else int(artifact.get("num_token_batches", 4))
@@ -164,29 +154,6 @@ def make_token_batches(artifact: dict[str, Any], count: int | None = None) -> li
         num_batches=num_batches,
         seed=int(artifact.get("data_seed", 13)),
     )
-
-
-def reconstruct_block(
-    parent: TinyCausalLM,
-    layer_idx: int,
-    spec: BlockSpec,
-    state_dict: dict[str, torch.Tensor],
-) -> torch.nn.Module:
-    block = make_block_variant(parent.blocks[layer_idx], spec, ffn_channel_order=None)
-    block.load_state_dict(state_dict)
-    return block
-
-
-def block_key(layer_idx: int, spec: BlockSpec) -> tuple[int, str, str]:
-    return (layer_idx, spec.attention.name, spec.ffn.name)
-
-
-def block_library_map(artifact: dict[str, Any]) -> dict[tuple[int, str, str], dict[str, Any]]:
-    records = {}
-    for item in artifact["blocks"]:
-        spec = spec_from_dict(item["spec"])
-        records[block_key(int(item["layer_idx"]), spec)] = item
-    return records
 
 
 def command_bld(args: argparse.Namespace) -> None:
@@ -406,6 +373,8 @@ def solution_to_config(solution, rank: int) -> dict[str, Any]:
         "total_memory": solution.total_memory,
         "total_runtime": solution.total_runtime,
         "throughput": solution.throughput,
+        "objective": solution.objective,
+        "objective_components": solution.objective_components,
         "selected": selected,
     }
 
@@ -422,12 +391,14 @@ def command_mip(args: argparse.Namespace) -> None:
         if parent is None:
             parent = next(candidate for candidate in layer if candidate.name.endswith("parent_attn+parent_ffn"))
         parent_candidates.append(parent)
-    parent_memory = sum(candidate.param_memory + candidate.kv_cache_memory for candidate in parent_candidates)
+    parent_memory_by_batch = {
+        batch_size: sum(candidate.param_memory + batch_size * candidate.kv_cache_memory for candidate in parent_candidates)
+        for batch_size in batch_sizes
+    }
     parent_runtime_by_batch = {
         batch_size: sum(candidate.runtimes[batch_size] for candidate in parent_candidates)
         for batch_size in batch_sizes
     }
-    latency_max = min(parent_runtime_by_batch.values()) * args.runtime_fraction
 
     configs = []
     previous: list[list[str]] = []
@@ -435,9 +406,20 @@ def command_mip(args: argparse.Namespace) -> None:
         constraints = SearchConstraints(
             seq_len=int(scores_payload["seq_len"]),
             batch_sizes=batch_sizes,
-            memory_max=parent_memory * args.memory_fraction,
-            latency_max=latency_max,
+            memory_max_by_batch={
+                batch_size: value * args.memory_fraction
+                for batch_size, value in parent_memory_by_batch.items()
+            },
+            latency_max_by_batch={
+                batch_size: value * args.runtime_fraction
+                for batch_size, value in parent_runtime_by_batch.items()
+            },
             score_direction="minimize",
+            objective_mode=args.objective_mode,
+            score_weight=args.score_weight,
+            memory_weight=args.memory_weight,
+            runtime_weight=args.runtime_weight,
+            normalize_objectives=not args.no_normalize_objectives,
             diversity_alpha=args.diversity_alpha if previous else None,
             previous_solutions=previous,
         )
@@ -458,12 +440,29 @@ def command_mip(args: argparse.Namespace) -> None:
         "top_k_requested": args.top_k,
         "memory_fraction": args.memory_fraction,
         "runtime_fraction": args.runtime_fraction,
+        "memory_max_by_batch": {
+            str(batch_size): value * args.memory_fraction
+            for batch_size, value in parent_memory_by_batch.items()
+        },
+        "latency_max_by_batch": {
+            str(batch_size): value * args.runtime_fraction
+            for batch_size, value in parent_runtime_by_batch.items()
+        },
+        "objective_mode": args.objective_mode,
+        "objective_weights": {
+            "score": args.score_weight,
+            "memory": args.memory_weight,
+            "runtime": args.runtime_weight,
+        },
+        "normalize_objectives": not args.no_normalize_objectives,
         "diversity_alpha": args.diversity_alpha,
         "configs": configs,
     }
     output_path = write_json(args.output_json, output)
     config_dir = resolve_path(args.config_dir)
     config_dir.mkdir(parents=True, exist_ok=True)
+    for stale in config_dir.glob("config_rank_*.json"):
+        stale.unlink()
     for config in configs:
         write_json(config_dir / f"config_rank_{config['rank']:02d}.json", config)
     print(f"wrote_topk_configs={output_path}")
@@ -478,23 +477,6 @@ def load_selected_config(args: argparse.Namespace) -> dict[str, Any]:
     if not configs:
         raise ValueError("configs JSON contains no configs")
     return configs[args.config_rank]
-
-
-def assemble_student_from_bld(
-    artifact: dict[str, Any],
-    selected_config: dict[str, Any],
-) -> tuple[TinyCausalLM, TinyCausalLM]:
-    parent = build_parent_model(artifact)
-    student = build_parent_model(artifact)
-    library = block_library_map(artifact)
-    for selected in selected_config["selected"]:
-        layer_idx = int(selected["layer_idx"])
-        selected_spec = spec_from_dict(selected["spec"])
-        base_spec = BlockSpec(selected_spec.attention, selected_spec.ffn)
-        record = library[block_key(layer_idx, base_spec)]
-        block = reconstruct_block(parent, layer_idx, base_spec, record["state_dict"])
-        student.blocks[layer_idx] = block
-    return parent, student
 
 
 def command_assemble(args: argparse.Namespace) -> None:
@@ -618,6 +600,11 @@ def build_parser() -> argparse.ArgumentParser:
     mip.add_argument("--memory-fraction", type=float, default=0.82)
     mip.add_argument("--runtime-fraction", type=float, default=0.82)
     mip.add_argument("--diversity-alpha", type=float, default=0.75)
+    mip.add_argument("--objective-mode", choices=["score", "weighted"], default="score")
+    mip.add_argument("--score-weight", type=float, default=1.0)
+    mip.add_argument("--memory-weight", type=float, default=0.0)
+    mip.add_argument("--runtime-weight", type=float, default=0.0)
+    mip.add_argument("--no-normalize-objectives", action="store_true")
     mip.set_defaults(func=command_mip)
 
     assemble = subparsers.add_parser("assemble", help="Stage 07: assemble a student model from a selected config.")

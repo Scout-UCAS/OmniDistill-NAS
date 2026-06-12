@@ -21,7 +21,7 @@ if is_real_workflow_backend; then
   if [[ "${NO_SKIP_UNAVAILABLE_FLA:-0}" =~ ^(1|true|yes|on)$ ]]; then
     MODEL_SCORE_ARGS+=(--no-skip-unavailable-fla)
   fi
-  run_python scripts/run_staged_model_pipeline.py score \
+  run_python tools/run_staged_model_pipeline.py score \
     "${MODEL_ARGS[@]}" \
     --bld-pth "${BLD_OUTPUT_PTH}" \
     --score-batches "${SCORE_BATCHES}" \
@@ -29,7 +29,7 @@ if is_real_workflow_backend; then
     --output-json "${NAS_IMPORTANCE_JSON}" \
     "${MODEL_SCORE_ARGS[@]}"
 else
-  run_python scripts/run_staged_toy_pipeline.py score \
+  run_python tools/run_staged_toy_pipeline.py score \
     --device "${DEVICE}" \
     --bld-pth "${BLD_OUTPUT_PTH}" \
     --score-batches "${SCORE_BATCHES}" \

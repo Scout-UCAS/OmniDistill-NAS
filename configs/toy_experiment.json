@@ -1,0 +1,48 @@
+{
+  "name": "toy-platform-smoke",
+  "backend": "toy",
+  "output_dir": "outputs/distill_nas_workflow",
+  "stages": [
+    "prepare",
+    "validate",
+    "smoke",
+    "bld",
+    "score",
+    "mip",
+    "multi_objective",
+    "assemble",
+    "gkd",
+    "evaluate",
+    "profile",
+    "export",
+    "report"
+  ],
+  "model": {
+    "seq_len": 16,
+    "batch_size": 2,
+    "num_batches": 4
+  },
+  "search": {
+    "attention_variants": "parent_attn,mha_attn,quant_mha_attn,mqa_attn,gqa_kv2,linear_attn,noop_attn",
+    "layer_variants": "parent,skip_attn,skip_mlp,skip_both",
+    "bld_steps": 1,
+    "score_batches": 2,
+    "batch_sizes": "1,2,4",
+    "top_k": 3,
+    "objective_mode": "score",
+    "score_weight": 1.0,
+    "memory_weight": 0.0,
+    "runtime_weight": 0.0
+  },
+  "distillation": {
+    "gkd_steps": 2,
+    "opd_weight": 0.0
+  },
+  "devices": {
+    "device": "auto"
+  },
+  "distributed": {
+    "gradient_accumulation_steps": 1,
+    "use_accelerate": false
+  }
+}

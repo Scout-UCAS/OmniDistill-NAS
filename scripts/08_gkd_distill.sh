@@ -30,15 +30,26 @@ fi
 if [[ -n "${OPD_TOP_K:-}" ]]; then
   GKD_ARGS+=(--opd-top-k "${OPD_TOP_K}")
 fi
-
 print_step "Step 8: GKD global distillation"
 if is_real_workflow_backend; then
   build_model_args
   if [[ "${SAVE_FULL_STATE_DICT:-0}" =~ ^(1|true|yes|on)$ ]]; then
     GKD_ARGS+=(--save-full-state-dict)
   fi
+  if [[ -n "${TEACHER_DEVICE:-}" ]]; then
+    GKD_ARGS+=(--teacher-device "${TEACHER_DEVICE}")
+  fi
+  if [[ -n "${STUDENT_DEVICE:-}" ]]; then
+    GKD_ARGS+=(--student-device "${STUDENT_DEVICE}")
+  fi
+  if [[ "${STRICT_ACTION_OPD:-0}" =~ ^(1|true|yes|on)$ ]]; then
+    GKD_ARGS+=(--strict-action-opd)
+  fi
+  if [[ "${ALLOW_PARTIAL_CHECKPOINT_LOAD:-0}" =~ ^(1|true|yes|on)$ ]]; then
+    GKD_ARGS+=(--allow-partial-checkpoint-load)
+  fi
   BASE_CMD=(
-    scripts/run_staged_model_pipeline.py gkd
+    tools/run_staged_model_pipeline.py gkd
     "${MODEL_ARGS[@]}"
     --assembled-pth "${ASSEMBLED_MODEL_PTH}"
     --gkd-steps "${GKD_STEPS}"
@@ -51,7 +62,7 @@ if is_real_workflow_backend; then
 else
   TOY_SEQ_LEN="${SEQ_LEN:-16}"
   BASE_CMD=(
-    scripts/run_staged_toy_pipeline.py gkd
+    tools/run_staged_toy_pipeline.py gkd
     --device "${DEVICE}"
     --assembled-pth "${ASSEMBLED_MODEL_PTH}"
     --seq-len "${TOY_SEQ_LEN}"

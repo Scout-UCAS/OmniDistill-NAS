@@ -289,6 +289,65 @@ class DistillationTest(unittest.TestCase):
 
         self.assertEqual(len(losses), 1)
 
+    def test_global_distillation_supports_gaussian_action_opd(self) -> None:
+        class GaussianActionPolicy(nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.mean = nn.Linear(3, 2)
+                self.log_std = nn.Parameter(torch.zeros(2))
+
+            def forward(self, proprio: torch.Tensor, output_hidden_states: bool = False, **_: object):
+                action_mean = self.mean(proprio)
+                action_log_std = self.log_std.view(1, -1).expand_as(action_mean)
+                hidden_states = (action_mean.unsqueeze(1),) if output_hidden_states else ()
+                return SimpleNamespace(
+                    action_mean=action_mean,
+                    action_log_std=action_log_std,
+                    hidden_states=hidden_states,
+                )
+
+        torch.manual_seed(41)
+        teacher = GaussianActionPolicy()
+        student = GaussianActionPolicy()
+        batch = {"proprio": torch.randn(4, 3)}
+
+        losses = global_knowledge_distillation(
+            teacher,
+            student,
+            [batch],
+            steps=1,
+            lr=1e-4,
+            opd_weight=0.5,
+            strict_action_opd=True,
+        )
+
+        self.assertEqual(len(losses), 1)
+
+    def test_forward_batch_filters_vla_auxiliary_keys_when_unsupported(self) -> None:
+        class TextOnlyModel(nn.Module):
+            def __init__(self) -> None:
+                super().__init__()
+                self.embedding = nn.Embedding(20, 8)
+                self.head = nn.Linear(8, 20)
+
+            def forward(self, input_ids: torch.Tensor, output_hidden_states: bool = False):
+                hidden = self.embedding(input_ids)
+                return SimpleNamespace(
+                    logits=self.head(hidden),
+                    hidden_states=(hidden,) if output_hidden_states else (),
+                )
+
+        model = TextOnlyModel()
+        batch = {
+            "input_ids": torch.randint(0, 20, (2, 3)),
+            "actions": torch.randn(2, 4),
+            "proprio": torch.randn(2, 7),
+        }
+
+        output = forward_batch(model, batch, output_hidden_states=True)
+
+        self.assertEqual(output.logits.shape[:2], (2, 3))
+
     def test_global_distillation_accepts_tensor_hidden_states(self) -> None:
         class TensorHiddenCausalLM(nn.Module):
             def __init__(self) -> None:

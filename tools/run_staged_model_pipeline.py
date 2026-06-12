@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import sys
 from pathlib import Path
@@ -14,9 +15,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from distill_nas_core.distill import global_knowledge_distillation
+from distill_nas_core.distill import AUXILIARY_BATCH_KEYS, global_knowledge_distillation
 from distill_nas_core.mip import SearchCandidate, SearchConstraints, solve_nas_mip
-from scripts.run_qwen3_attention_search import (
+from tools.run_qwen3_attention_search import (
     DEFAULT_HF_CACHE,
     DEFAULT_VARIANTS,
     FLA_REPO,
@@ -105,11 +106,28 @@ def forward_model(model: nn.Module, batch: dict[str, Any], **kwargs):
         return model(**batch, **kwargs)
     except TypeError as exc:
         if not kwargs:
-            raise
+            filtered = {key: value for key, value in batch.items() if key not in AUXILIARY_BATCH_KEYS}
+            if len(filtered) == len(batch):
+                raise
+            try:
+                return model(**filtered)
+            except TypeError:
+                raise exc
         try:
             return model(**batch)
         except TypeError:
-            raise exc
+            filtered = {key: value for key, value in batch.items() if key not in AUXILIARY_BATCH_KEYS}
+            if len(filtered) == len(batch):
+                raise exc
+            filtered_merged = dict(filtered)
+            filtered_merged.update(kwargs)
+            try:
+                return model(**filtered_merged)
+            except TypeError:
+                try:
+                    return model(**filtered)
+                except TypeError:
+                    raise exc
 
 
 def iter_layer_indices(num_layers: int, max_layers: int, layer_stride: int) -> list[int]:
@@ -182,7 +200,18 @@ def replacement_state(candidate: QwenCandidateLayer) -> tuple[str | None, dict[s
     return attr, {key: value.detach().cpu() for key, value in module.state_dict().items()}
 
 
-def load_replacement_state(candidate: QwenCandidateLayer, record: dict[str, Any] | None) -> None:
+def load_state_dict_checked(module: nn.Module, state: dict[str, torch.Tensor], strict: bool, context: str) -> None:
+    result = module.load_state_dict(state, strict=strict)
+    missing = list(getattr(result, "missing_keys", []))
+    unexpected = list(getattr(result, "unexpected_keys", []))
+    if not strict and (missing or unexpected):
+        print(
+            f"partial_checkpoint_load context={context} missing={missing} unexpected={unexpected}",
+            file=sys.stderr,
+        )
+
+
+def load_replacement_state(candidate: QwenCandidateLayer, record: dict[str, Any] | None, strict: bool = True) -> None:
     if not record:
         return
     attr = record.get("replacement_attr")
@@ -192,10 +221,10 @@ def load_replacement_state(candidate: QwenCandidateLayer, record: dict[str, Any]
     module = getattr(candidate, attr, None)
     if module is None:
         raise RuntimeError(f"candidate {candidate.variant} has no replacement module {attr!r}")
-    module.load_state_dict(state, strict=False)
+    load_state_dict_checked(module, state, strict=strict, context=f"{candidate.variant}.{attr}")
 
 
-def restore_selected_replacements(layers: nn.ModuleList, replacements: list[dict[str, Any]]) -> None:
+def restore_selected_replacements(layers: nn.ModuleList, replacements: list[dict[str, Any]], strict: bool = True) -> None:
     for record in replacements:
         layer_idx = int(record["layer_idx"])
         layer = layers[layer_idx]
@@ -205,7 +234,7 @@ def restore_selected_replacements(layers: nn.ModuleList, replacements: list[dict
                     f"cannot restore replacement weights for layer {layer_idx}: assembled layer is not a QwenCandidateLayer"
                 )
             continue
-        load_replacement_state(layer, record)
+        load_replacement_state(layer, record, strict=strict)
 
 
 def train_candidate(
@@ -258,6 +287,7 @@ def make_candidate(
     fla_mode: str,
     fla_feature_map: str,
     record: dict[str, Any] | None = None,
+    strict_checkpoint: bool = True,
 ) -> QwenCandidateLayer:
     candidate = QwenCandidateLayer(
         base_layer,
@@ -267,7 +297,7 @@ def make_candidate(
         fla_mode=fla_mode,
         fla_feature_map=fla_feature_map,
     )
-    load_replacement_state(candidate, record)
+    load_replacement_state(candidate, record, strict=strict_checkpoint)
     return candidate
 
 
@@ -276,6 +306,7 @@ def apply_architecture(
     language_config: Any,
     selected_config: dict[str, Any],
     artifact: dict[str, Any],
+    strict_checkpoint: bool = True,
 ) -> list[dict[str, Any]]:
     record_map = records_by_key(artifact)
     applied: list[dict[str, Any]] = []
@@ -291,6 +322,7 @@ def apply_architecture(
             fla_mode=artifact.get("fla", {}).get("mode", "chunk"),
             fla_feature_map=artifact.get("fla", {}).get("feature_map", "elu"),
             record=record,
+            strict_checkpoint=strict_checkpoint,
         )
         layers[layer_idx] = candidate
         attr, state = replacement_state(candidate)
@@ -550,6 +582,8 @@ def solution_to_config(solution, rank: int) -> dict[str, Any]:
         "total_memory": solution.total_memory,
         "total_runtime": solution.total_runtime,
         "throughput": solution.throughput,
+        "objective": solution.objective,
+        "objective_components": solution.objective_components,
         "selected": [
             {
                 "layer_idx": candidate.layer_idx,
@@ -578,21 +612,34 @@ def command_mip(args: argparse.Namespace) -> None:
         if parent is None:
             raise RuntimeError("each searched layer must include a parent or parent_attn candidate")
         parent_candidates.append(parent)
-    parent_memory = sum(candidate.param_memory + candidate.kv_cache_memory for candidate in parent_candidates)
+    parent_memory_by_batch = {
+        batch_size: sum(candidate.param_memory + batch_size * candidate.kv_cache_memory for candidate in parent_candidates)
+        for batch_size in batch_sizes
+    }
     parent_runtime_by_batch = {
         batch_size: sum(candidate.runtimes[batch_size] for candidate in parent_candidates)
         for batch_size in batch_sizes
     }
-    latency_max = min(parent_runtime_by_batch.values()) * args.runtime_fraction
     previous: list[list[str]] = []
     configs = []
     for rank in range(args.top_k):
         constraints = SearchConstraints(
             seq_len=int(scores_payload["seq_len"]),
             batch_sizes=batch_sizes,
-            memory_max=parent_memory * args.memory_fraction,
-            latency_max=latency_max,
+            memory_max_by_batch={
+                batch_size: value * args.memory_fraction
+                for batch_size, value in parent_memory_by_batch.items()
+            },
+            latency_max_by_batch={
+                batch_size: value * args.runtime_fraction
+                for batch_size, value in parent_runtime_by_batch.items()
+            },
             score_direction="minimize",
+            objective_mode=args.objective_mode,
+            score_weight=args.score_weight,
+            memory_weight=args.memory_weight,
+            runtime_weight=args.runtime_weight,
+            normalize_objectives=not args.no_normalize_objectives,
             diversity_alpha=args.diversity_alpha if previous else None,
             previous_solutions=previous,
         )
@@ -614,12 +661,29 @@ def command_mip(args: argparse.Namespace) -> None:
         "top_k_requested": args.top_k,
         "memory_fraction": args.memory_fraction,
         "runtime_fraction": args.runtime_fraction,
+        "memory_max_by_batch": {
+            str(batch_size): value * args.memory_fraction
+            for batch_size, value in parent_memory_by_batch.items()
+        },
+        "latency_max_by_batch": {
+            str(batch_size): value * args.runtime_fraction
+            for batch_size, value in parent_runtime_by_batch.items()
+        },
+        "objective_mode": args.objective_mode,
+        "objective_weights": {
+            "score": args.score_weight,
+            "memory": args.memory_weight,
+            "runtime": args.runtime_weight,
+        },
+        "normalize_objectives": not args.no_normalize_objectives,
         "diversity_alpha": args.diversity_alpha,
         "configs": configs,
     }
     output_path = write_json(args.output_json, payload)
     config_dir = resolve_path(args.config_dir)
     config_dir.mkdir(parents=True, exist_ok=True)
+    for stale in config_dir.glob("config_rank_*.json"):
+        stale.unlink()
     for config in configs:
         write_json(config_dir / f"config_rank_{config['rank']:02d}.json", config)
     print(f"wrote_topk_configs={output_path}")
@@ -640,7 +704,13 @@ def command_assemble(args: argparse.Namespace) -> None:
     artifact = load_pth(args.bld_pth)
     selected_config = load_selected_config(args)
     loaded, batches, _prompt_metadata, _device, _dtype, _cache_dir = make_context(args)
-    selected_replacements = apply_architecture(loaded.layers, loaded.language_config, selected_config, artifact)
+    selected_replacements = apply_architecture(
+        loaded.layers,
+        loaded.language_config,
+        selected_config,
+        artifact,
+        strict_checkpoint=not args.allow_partial_checkpoint_load,
+    )
     if not args.skip_forward_check and batches:
         with torch.inference_mode():
             forward_model(loaded.model, batches[0], use_cache=False)
@@ -666,6 +736,7 @@ def command_assemble(args: argparse.Namespace) -> None:
             "rank": selected_config.get("rank"),
             "selected": [item["name"] for item in selected_config["selected"]],
             "save_full_state_dict": args.save_full_state_dict,
+            "strict_checkpoint_load": not args.allow_partial_checkpoint_load,
         },
     )
     print(f"wrote_assembled_pth={pth_path}")
@@ -675,24 +746,47 @@ def command_assemble(args: argparse.Namespace) -> None:
 def command_gkd(args: argparse.Namespace) -> None:
     assembled = load_pth(args.assembled_pth)
     bld_artifact = load_pth(assembled["bld_pth"])
-    teacher_loaded, batches, _prompt_metadata, device, _dtype, _cache_dir = make_context(args)
-    student_loaded, _student_batches, _student_prompt_metadata, _student_device, _student_dtype, _student_cache_dir = make_context(args)
-    apply_architecture(student_loaded.layers, student_loaded.language_config, assembled["architecture_config"], bld_artifact)
-    restore_selected_replacements(student_loaded.layers, assembled.get("selected_replacements", []))
+    teacher_args = copy.copy(args)
+    student_args = copy.copy(args)
+    base_device = getattr(args, "device", "auto")
+    teacher_args.device = args.teacher_device or base_device
+    student_args.device = args.student_device or base_device
+    teacher_loaded, batches, _prompt_metadata, teacher_device, _dtype, _cache_dir = make_context(teacher_args)
+    student_loaded, _student_batches, _student_prompt_metadata, student_device, _student_dtype, _student_cache_dir = make_context(student_args)
+    apply_architecture(
+        student_loaded.layers,
+        student_loaded.language_config,
+        assembled["architecture_config"],
+        bld_artifact,
+        strict_checkpoint=not args.allow_partial_checkpoint_load,
+    )
+    restore_selected_replacements(
+        student_loaded.layers,
+        assembled.get("selected_replacements", []),
+        strict=not args.allow_partial_checkpoint_load,
+    )
     if "model_state_dict" in assembled:
-        student_loaded.model.load_state_dict(assembled["model_state_dict"], strict=False)
+        load_state_dict_checked(
+            student_loaded.model,
+            assembled["model_state_dict"],
+            strict=not args.allow_partial_checkpoint_load,
+            context="assembled_model_state_dict",
+        )
     losses = global_knowledge_distillation(
         teacher_loaded.model,
         student_loaded.model,
         batches,
         steps=args.gkd_steps,
         lr=args.lr,
-        device=device,
+        device=student_device,
         include_lm_loss=args.include_lm_loss,
         opd_weight=args.opd_weight,
         opd_max_new_tokens=args.opd_max_new_tokens,
         opd_temperature=args.opd_temperature,
         opd_top_k=args.opd_top_k,
+        teacher_device=teacher_device,
+        student_device=student_device,
+        strict_action_opd=args.strict_action_opd,
     )
     selected_replacements = []
     for selected in assembled["architecture_config"]["selected"]:
@@ -733,6 +827,10 @@ def command_gkd(args: argparse.Namespace) -> None:
             "last_loss": losses[-1] if losses else None,
             "opd_weight": args.opd_weight,
             "opd_max_new_tokens": args.opd_max_new_tokens,
+            "teacher_device": str(teacher_device),
+            "student_device": str(student_device),
+            "strict_action_opd": args.strict_action_opd,
+            "strict_checkpoint_load": not args.allow_partial_checkpoint_load,
             "save_full_state_dict": args.save_full_state_dict,
         },
     )
@@ -806,6 +904,11 @@ def build_parser() -> argparse.ArgumentParser:
     mip.add_argument("--memory-fraction", type=float, default=0.82)
     mip.add_argument("--runtime-fraction", type=float, default=0.82)
     mip.add_argument("--diversity-alpha", type=float, default=0.75)
+    mip.add_argument("--objective-mode", choices=["score", "weighted"], default="score")
+    mip.add_argument("--score-weight", type=float, default=1.0)
+    mip.add_argument("--memory-weight", type=float, default=0.0)
+    mip.add_argument("--runtime-weight", type=float, default=0.0)
+    mip.add_argument("--no-normalize-objectives", action="store_true")
     mip.set_defaults(func=command_mip)
 
     assemble = subparsers.add_parser("assemble", help="Stage 07: assemble a real-model student from a selected config.")
@@ -816,6 +919,7 @@ def build_parser() -> argparse.ArgumentParser:
     assemble.add_argument("--config-rank", type=int, default=0)
     assemble.add_argument("--skip-forward-check", action="store_true")
     assemble.add_argument("--save-full-state-dict", action="store_true")
+    assemble.add_argument("--allow-partial-checkpoint-load", action="store_true")
     assemble.add_argument("--output-pth", default=str(DEFAULT_ASSEMBLY_OUTPUT_DIR / "assembled_model.pth"))
     assemble.add_argument("--summary-json", default=str(DEFAULT_ASSEMBLY_OUTPUT_DIR / "summary.json"))
     assemble.set_defaults(func=command_assemble)
@@ -830,6 +934,10 @@ def build_parser() -> argparse.ArgumentParser:
     gkd.add_argument("--opd-max-new-tokens", type=int, default=0)
     gkd.add_argument("--opd-temperature", type=float, default=None)
     gkd.add_argument("--opd-top-k", type=int, default=None)
+    gkd.add_argument("--teacher-device", default=None)
+    gkd.add_argument("--student-device", default=None)
+    gkd.add_argument("--strict-action-opd", action="store_true")
+    gkd.add_argument("--allow-partial-checkpoint-load", action="store_true")
     gkd.add_argument("--save-full-state-dict", action="store_true")
     gkd.add_argument("--output-pth", default=str(DEFAULT_GKD_OUTPUT_DIR / "gkd_model.pth"))
     gkd.add_argument("--summary-json", default=str(DEFAULT_GKD_OUTPUT_DIR / "summary.json"))

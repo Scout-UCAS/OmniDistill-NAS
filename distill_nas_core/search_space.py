@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
+from collections.abc import Callable
 from typing import Iterable
 
 import torch
@@ -57,6 +58,35 @@ class BlockSpec:
         if self.alias is not None:
             return self.alias
         return f"{self.attention.name}+{self.ffn.name}"
+
+
+AttentionSpecFactory = Callable[[str, int], AttentionSpec]
+AttentionModuleFactory = Callable[[CausalSelfAttention, AttentionSpec], nn.Module]
+_CUSTOM_ATTENTION_SPEC_FACTORIES: dict[str, AttentionSpecFactory] = {}
+_CUSTOM_ATTENTION_MODULE_FACTORIES: dict[str, AttentionModuleFactory] = {}
+_CUSTOM_ATTENTION_ALIASES: dict[str, tuple[str, ...]] = {}
+
+
+def register_attention_variant(
+    name: str,
+    spec_factory: AttentionSpecFactory,
+    module_factory: AttentionModuleFactory,
+    aliases: Iterable[str] = (),
+) -> None:
+    """Register an attention candidate without editing the built-in search space."""
+
+    if not name:
+        raise ValueError("attention variant name must be non-empty")
+    _CUSTOM_ATTENTION_SPEC_FACTORIES[name] = spec_factory
+    _CUSTOM_ATTENTION_MODULE_FACTORIES[name] = module_factory
+    for alias in aliases:
+        if not alias:
+            raise ValueError("attention variant aliases must be non-empty")
+        _CUSTOM_ATTENTION_ALIASES[alias] = (name,)
+
+
+def registered_attention_variants() -> tuple[str, ...]:
+    return tuple(_CUSTOM_ATTENTION_SPEC_FACTORIES)
 
 
 QWEN_ATTENTION_VARIANT_NAMES = (
@@ -160,7 +190,7 @@ def expand_attention_variant_names(raw_variants: str | Iterable[str]) -> list[st
         names = [name.strip() for name in raw_variants if name.strip()]
     variants: list[str] = []
     for name in names:
-        expanded = ATTENTION_VARIANT_ALIASES.get(name, (name,))
+        expanded = _CUSTOM_ATTENTION_ALIASES.get(name, ATTENTION_VARIANT_ALIASES.get(name, (name,)))
         for variant in expanded:
             if variant in {"skip_attn", "skip_mlp", "skip_both"}:
                 raise ValueError(f"{variant} is a layer variant; use --layer-variants instead")
@@ -170,6 +200,8 @@ def expand_attention_variant_names(raw_variants: str | Iterable[str]) -> list[st
 
 
 def attention_spec_from_name(name: str, parent_num_heads: int) -> AttentionSpec:
+    if name in _CUSTOM_ATTENTION_SPEC_FACTORIES:
+        return _CUSTOM_ATTENTION_SPEC_FACTORIES[name](name, parent_num_heads)
     if name == "parent_attn":
         return AttentionSpec(name, "parent", parent_num_heads)
     if name == "mha_attn":
@@ -308,6 +340,8 @@ def ffn_channel_contribution_order(
 
 
 def make_attention_variant(parent_attention: CausalSelfAttention, spec: AttentionSpec) -> nn.Module:
+    if spec.name in _CUSTOM_ATTENTION_MODULE_FACTORIES:
+        return _CUSTOM_ATTENTION_MODULE_FACTORIES[spec.name](parent_attention, spec)
     if spec.kind == "parent":
         return copy.deepcopy(parent_attention)
     if spec.kind == "mha":

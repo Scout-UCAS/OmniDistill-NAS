@@ -68,6 +68,20 @@ def batch_input_ids(batch) -> torch.Tensor | None:
     return None
 
 
+AUXILIARY_BATCH_KEYS = {
+    "actions",
+    "action",
+    "target_action",
+    "action_targets",
+    "proprio",
+    "state",
+    "robot_state",
+    "metadata",
+    "target",
+    "targets",
+}
+
+
 def _extend_sequence_side_input(
     value,
     previous_input_ids: torch.Tensor | None,
@@ -125,11 +139,28 @@ def forward_batch(model: nn.Module, batch, **kwargs):
             return model(**merged)
         except TypeError as exc:
             if not kwargs:
-                raise
+                filtered = {key: value for key, value in batch.items() if key not in AUXILIARY_BATCH_KEYS}
+                if len(filtered) == len(batch):
+                    raise
+                try:
+                    return model(**filtered)
+                except TypeError:
+                    raise exc
             try:
                 return model(**batch)
             except TypeError:
-                raise exc
+                filtered = {key: value for key, value in batch.items() if key not in AUXILIARY_BATCH_KEYS}
+                if len(filtered) == len(batch):
+                    raise exc
+                filtered_merged = dict(filtered)
+                filtered_merged.update(kwargs)
+                try:
+                    return model(**filtered_merged)
+                except TypeError:
+                    try:
+                        return model(**filtered)
+                    except TypeError:
+                        raise exc
     try:
         return model(batch, **kwargs)
     except TypeError as exc:
@@ -181,8 +212,25 @@ ACTION_VALUE_TARGET_NAMES = (
     "action_preds",
     "action_pred",
 )
+ACTION_MEAN_TARGET_NAMES = (
+    "action_mean",
+    "action_means",
+    "predicted_action_mean",
+    "predicted_action_means",
+    "action_mu",
+    "action_mus",
+)
+ACTION_LOG_STD_TARGET_NAMES = (
+    "action_log_std",
+    "action_log_stds",
+    "predicted_action_log_std",
+    "predicted_action_log_stds",
+    "action_log_sigma",
+    "action_log_sigmas",
+)
 DISTILL_TARGET_PRIORITIES = (
     *((name, "kl") for name in ACTION_LOGIT_TARGET_NAMES),
+    *((name, "mse") for name in ACTION_MEAN_TARGET_NAMES),
     *((name, "mse") for name in ACTION_VALUE_TARGET_NAMES),
     ("logits", "kl"),
 )
@@ -210,7 +258,8 @@ def extract_distill_target(output: Any, preferred_name: str | None = None) -> Di
 
 
 def has_action_target(output: Any) -> bool:
-    return any(isinstance(output_value(output, name), torch.Tensor) for name in ACTION_LOGIT_TARGET_NAMES + ACTION_VALUE_TARGET_NAMES)
+    names = ACTION_LOGIT_TARGET_NAMES + ACTION_VALUE_TARGET_NAMES + ACTION_MEAN_TARGET_NAMES
+    return any(isinstance(output_value(output, name), torch.Tensor) for name in names)
 
 
 def output_distillation_loss(
@@ -282,6 +331,42 @@ def sampled_action_reverse_kl_loss(
     return (selected_student - selected_teacher).mean() * (temperature**2)
 
 
+def normal_log_prob(value: torch.Tensor, mean: torch.Tensor, log_std: torch.Tensor) -> torch.Tensor:
+    log_std = log_std.clamp(min=-20.0, max=5.0)
+    variance = torch.exp(2.0 * log_std)
+    log_two_pi = torch.log(torch.tensor(2.0 * torch.pi, device=value.device, dtype=value.dtype))
+    return -0.5 * (((value - mean) ** 2) / variance + 2.0 * log_std + log_two_pi)
+
+
+def sampled_continuous_action_reverse_kl_loss(
+    teacher_mean: torch.Tensor,
+    teacher_log_std: torch.Tensor,
+    student_mean: torch.Tensor,
+    student_log_std: torch.Tensor,
+    temperature: float = 1.0,
+) -> torch.Tensor:
+    """Monte Carlo reverse-KL term for Gaussian continuous action policies."""
+
+    if teacher_mean.shape != student_mean.shape:
+        raise ValueError("teacher and student action means must have matching shapes")
+    if teacher_log_std.shape != teacher_mean.shape:
+        teacher_log_std = teacher_log_std.expand_as(teacher_mean)
+    if student_log_std.shape != student_mean.shape:
+        student_log_std = student_log_std.expand_as(student_mean)
+    teacher_log_temperature = torch.log(torch.tensor(temperature, device=teacher_mean.device, dtype=teacher_mean.dtype))
+    student_log_temperature = torch.log(torch.tensor(temperature, device=student_mean.device, dtype=student_mean.dtype))
+    scaled_teacher_log_std = teacher_log_std + teacher_log_temperature
+    scaled_student_log_std = student_log_std + student_log_temperature
+    with torch.no_grad():
+        eps = torch.randn_like(student_mean)
+        sampled_action = student_mean + torch.exp(scaled_student_log_std) * eps
+    teacher_mean = teacher_mean.to(device=sampled_action.device, dtype=sampled_action.dtype)
+    scaled_teacher_log_std = scaled_teacher_log_std.to(device=sampled_action.device, dtype=sampled_action.dtype)
+    selected_teacher = normal_log_prob(sampled_action, teacher_mean, scaled_teacher_log_std).sum(dim=-1)
+    selected_student = normal_log_prob(sampled_action, student_mean, scaled_student_log_std).sum(dim=-1)
+    return (selected_student - selected_teacher).mean()
+
+
 def sample_on_policy_sequences(
     student: nn.Module,
     prompt_ids,
@@ -323,9 +408,13 @@ def on_policy_distillation_loss(
     max_new_tokens: int,
     temperature: float = 1.0,
     top_k: int | None = None,
+    teacher_device: torch.device | str | None = None,
+    student_device: torch.device | str | None = None,
 ) -> torch.Tensor:
     """Sample from the student, then minimize reverse KL on generated tokens."""
 
+    if student_device is not None:
+        prompt_ids = move_batch_to_device(prompt_ids, student_device)
     prompt_input_ids = batch_input_ids(prompt_ids)
     if prompt_input_ids is None:
         raise ValueError("OPD requires input_ids in the batch")
@@ -339,8 +428,14 @@ def on_policy_distillation_loss(
             top_k=top_k,
         )
         sampled_batch = batch_with_input_ids(prompt_ids, sampled_ids, drop_labels=True)
-        teacher_logits = output_tensor(forward_batch(teacher, sampled_batch), "logits", "Token OPD teacher pass")[:, :-1, :]
+        teacher_batch = sampled_batch
+        if teacher_device is not None:
+            teacher_device = torch.device(teacher_device)
+            teacher_prompt = move_batch_to_device(prompt_ids, teacher_device)
+            teacher_batch = batch_with_input_ids(teacher_prompt, sampled_ids.to(teacher_device), drop_labels=True)
+        teacher_logits = output_tensor(forward_batch(teacher, teacher_batch), "logits", "Token OPD teacher pass")[:, :-1, :]
     student_logits = output_tensor(forward_batch(student, sampled_batch), "logits", "Token OPD student pass")[:, :-1, :]
+    teacher_logits = teacher_logits.to(device=student_logits.device)
     target_ids = sampled_ids[:, 1:]
     label_positions = torch.arange(target_ids.shape[1], device=target_ids.device).unsqueeze(0) + 1
     generated_token_mask = label_positions >= prompt_len
@@ -364,6 +459,9 @@ def on_policy_action_distillation_loss(
     student: nn.Module,
     batch,
     temperature: float = 1.0,
+    teacher_device: torch.device | str | None = None,
+    student_device: torch.device | str | None = None,
+    strict_stochastic: bool = False,
 ) -> torch.Tensor:
     """Action-space OPD for VLA-style policies.
 
@@ -372,20 +470,52 @@ def on_policy_action_distillation_loss(
     match the teacher action prediction on the same observation batch.
     """
 
+    teacher_batch = move_batch_to_device(batch, teacher_device) if teacher_device is not None else batch
+    student_batch = move_batch_to_device(batch, student_device) if student_device is not None else batch
     with torch.no_grad():
-        teacher_output = forward_batch(teacher, batch)
-    student_output = forward_batch(student, batch)
+        teacher_output = forward_batch(teacher, teacher_batch)
+    student_output = forward_batch(student, student_batch)
 
     student_logits = _extract_named_tensor(student_output, ACTION_LOGIT_TARGET_NAMES)
     if student_logits is not None:
         teacher_logits = _extract_named_tensor(teacher_output, ACTION_LOGIT_TARGET_NAMES, preferred_name=student_logits.name)
         if teacher_logits is None:
             raise RuntimeError(f"teacher output is missing action logits compatible with {student_logits.name}")
-        return sampled_action_reverse_kl_loss(teacher_logits.tensor, student_logits.tensor, temperature=temperature)
+        return sampled_action_reverse_kl_loss(
+            teacher_logits.tensor.to(device=student_logits.tensor.device),
+            student_logits.tensor,
+            temperature=temperature,
+        )
+
+    student_mean = _extract_named_tensor(student_output, ACTION_MEAN_TARGET_NAMES)
+    if student_mean is not None:
+        teacher_mean = _extract_named_tensor(teacher_output, ACTION_MEAN_TARGET_NAMES, preferred_name=student_mean.name)
+        if teacher_mean is None:
+            raise RuntimeError(f"teacher output is missing action mean tensors compatible with {student_mean.name}")
+        student_log_std = _extract_named_tensor(student_output, ACTION_LOG_STD_TARGET_NAMES)
+        teacher_log_std = _extract_named_tensor(
+            teacher_output,
+            ACTION_LOG_STD_TARGET_NAMES,
+            preferred_name=None if student_log_std is None else student_log_std.name,
+        )
+        if student_log_std is not None and teacher_log_std is not None:
+            return sampled_continuous_action_reverse_kl_loss(
+                teacher_mean.tensor.to(device=student_mean.tensor.device),
+                teacher_log_std.tensor.to(device=student_mean.tensor.device),
+                student_mean.tensor,
+                student_log_std.tensor,
+                temperature=temperature,
+            )
+        if strict_stochastic:
+            raise RuntimeError("strict action OPD requires continuous action log_std tensors")
+        teacher_tensor = teacher_mean.tensor.to(device=student_mean.tensor.device)
+        return F.mse_loss(student_mean.tensor.float(), teacher_tensor.float())
 
     student_action = _extract_named_tensor(student_output, ACTION_VALUE_TARGET_NAMES)
     if student_action is None:
         raise RuntimeError("student output does not expose action tensors for action-space OPD")
+    if strict_stochastic:
+        raise RuntimeError("strict action OPD requires action logits or continuous action distribution tensors")
     teacher_action = _extract_named_tensor(teacher_output, ACTION_VALUE_TARGET_NAMES, preferred_name=student_action.name)
     if teacher_action is None:
         raise RuntimeError(f"teacher output is missing action tensors compatible with {student_action.name}")
@@ -408,6 +538,7 @@ def hidden_cosine_loss(
         student_hidden = student_hidden[:count]
     losses = []
     for teacher, student in zip(teacher_hidden, student_hidden, strict=False):
+        teacher = teacher.to(device=student.device)
         losses.append(1.0 - F.cosine_similarity(student, teacher, dim=-1).mean())
     return torch.stack(losses).mean()
 
@@ -508,6 +639,9 @@ def global_knowledge_distillation(
     opd_max_new_tokens: int = 0,
     opd_temperature: float | None = None,
     opd_top_k: int | None = None,
+    teacher_device: torch.device | str | None = None,
+    student_device: torch.device | str | None = None,
+    strict_action_opd: bool = False,
 ) -> list[float]:
     """GKD stage with optional on-policy distillation on student samples."""
 
@@ -519,11 +653,13 @@ def global_knowledge_distillation(
     teacher_state = _snapshot_module_state(teacher)
     student_state = _snapshot_module_state(student)
     device = torch.device(device)
+    teacher_device = torch.device(teacher_device) if teacher_device is not None else device
+    student_device = torch.device(student_device) if student_device is not None else device
     opd_temperature = temperature if opd_temperature is None else opd_temperature
     losses: list[float] = []
     try:
-        teacher = teacher.to(device)
-        student = student.to(device)
+        teacher = teacher.to(teacher_device)
+        student = student.to(student_device)
         teacher.eval()
         student.train()
         freeze(teacher)
@@ -532,10 +668,12 @@ def global_knowledge_distillation(
 
         batches = _cycle(token_batches)
         for _ in range(steps):
-            batch = move_batch_to_device(next(batches), device)
+            raw_batch = next(batches)
+            teacher_batch = move_batch_to_device(raw_batch, teacher_device)
+            batch = move_batch_to_device(raw_batch, student_device)
             input_ids = batch_input_ids(batch)
             with torch.no_grad():
-                teacher_out = forward_batch(teacher, batch, output_hidden_states=True)
+                teacher_out = forward_batch(teacher, teacher_batch, output_hidden_states=True)
             student_out = forward_batch(student, batch, output_hidden_states=True)
 
             loss = output_distillation_loss(teacher_out, student_out, temperature)
@@ -558,8 +696,11 @@ def global_knowledge_distillation(
                     opd_loss = on_policy_action_distillation_loss(
                         teacher,
                         student,
-                        batch,
+                        raw_batch,
                         temperature=opd_temperature,
+                        teacher_device=teacher_device,
+                        student_device=student_device,
+                        strict_stochastic=strict_action_opd,
                     )
                     loss = loss + opd_weight * opd_loss
                 elif opd_max_new_tokens > 0:
@@ -574,6 +715,8 @@ def global_knowledge_distillation(
                         max_new_tokens=opd_max_new_tokens,
                         temperature=opd_temperature,
                         top_k=opd_top_k,
+                        teacher_device=teacher_device,
+                        student_device=student_device,
                     )
                     loss = loss + opd_weight * opd_loss
                 else:

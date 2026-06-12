@@ -8,7 +8,7 @@ from unittest.mock import patch
 import torch
 from torch import nn
 
-import scripts.run_staged_model_pipeline as staged
+import tools.run_staged_model_pipeline as staged
 
 
 class FakeCandidateLayer(nn.Module):
@@ -101,6 +101,10 @@ class StagedModelPipelineTest(unittest.TestCase):
             opd_max_new_tokens=0,
             opd_temperature=None,
             opd_top_k=None,
+            teacher_device=None,
+            student_device=None,
+            strict_action_opd=False,
+            allow_partial_checkpoint_load=False,
             save_full_state_dict=False,
             output_pth="unused.pth",
             summary_json="unused.json",

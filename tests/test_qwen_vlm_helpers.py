@@ -10,7 +10,7 @@ import torch
 from torch import nn
 from PIL import Image
 
-from scripts.run_qwen3_attention_search import (
+from tools.run_qwen3_attention_search import (
     COMMON_DATASET_ALIASES,
     DatasetSpec,
     ScoreTarget,
@@ -19,10 +19,12 @@ from scripts.run_qwen3_attention_search import (
     extract_score_target,
     find_decoder_layers,
     format_dataset_example,
+    format_vla_prompt,
     load_dataset_examples,
     load_multimodal_image,
     make_multimodal_batches,
     move_batch_to_device,
+    dtype_from_name,
     normalize_model_kind,
     resolve_language_config,
     score_target_distance,
@@ -165,6 +167,53 @@ class QwenVlmHelperTest(unittest.TestCase):
         self.assertTrue(str(vlm.image).endswith("/tmp/images/frame.png"))
         self.assertIn("vision-language-action", vla.prompt)
         self.assertIn("0.1", vla.prompt)
+        self.assertEqual(vla.action, [0.1, 0.0, 0.2])
+
+    def test_vla_formatter_accepts_tensor_state_and_action(self) -> None:
+        prompt = format_vla_prompt(
+            {
+                "language_instruction": "move to target",
+                "state": torch.tensor([1.0, 2.0]),
+                "action": torch.tensor([0.1, 0.2]),
+            },
+            include_target=True,
+        )
+
+        self.assertIn("move to target", prompt)
+        self.assertIn("0.100", prompt)
+
+    def test_vla_multimodal_batches_keep_structured_action_and_state(self) -> None:
+        processor = FakeProcessor()
+        examples = [
+            format_dataset_example(
+                {
+                    "instruction": "pick up the red block",
+                    "state": [1.0, 2.0],
+                    "action": [0.1, 0.2, 0.3],
+                },
+                DatasetSpec("unit", "vla", None, None, "test"),
+                image_root=None,
+                include_target=False,
+            )
+        ]
+
+        batches = make_multimodal_batches(
+            processor,
+            examples,
+            seq_len=8,
+            device=torch.device("cpu"),
+            image_path=None,
+            image_size=4,
+            add_generation_prompt=True,
+            model_kind="vla",
+            allow_blank_image=True,
+        )
+
+        self.assertEqual(batches[0]["actions"].shape, (1, 3))
+        self.assertEqual(batches[0]["proprio"].shape, (1, 2))
+
+    def test_auto_dtype_uses_float32_on_cpu(self) -> None:
+        self.assertEqual(dtype_from_name("auto", torch.device("cpu")), torch.float32)
 
     def test_common_dataset_aliases_have_supported_formatter_paths(self) -> None:
         self.assertGreater(len(COMMON_DATASET_ALIASES), 0)

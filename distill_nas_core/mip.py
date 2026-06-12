@@ -24,9 +24,16 @@ class SearchConstraints:
     seq_len: int
     batch_sizes: Sequence[int]
     memory_max: float | None = None
+    memory_max_by_batch: dict[int, float] | None = None
     throughput_min: float | None = None
     latency_max: float | None = None
+    latency_max_by_batch: dict[int, float] | None = None
     score_direction: str = "minimize"
+    objective_mode: str = "score"
+    score_weight: float = 1.0
+    memory_weight: float = 0.0
+    runtime_weight: float = 0.0
+    normalize_objectives: bool = True
     diversity_alpha: float | None = None
     previous_solutions: Sequence[Sequence[str]] = field(default_factory=tuple)
     time_limit_seconds: float | None = 30.0
@@ -41,6 +48,7 @@ class NasSolution:
     total_runtime: float
     throughput: float
     objective: float
+    objective_components: dict[str, float] = field(default_factory=dict)
 
     @property
     def selected_names(self) -> list[str]:
@@ -55,6 +63,17 @@ def solve_nas_mip(
 
     if constraints.score_direction not in {"minimize", "maximize"}:
         raise ValueError("score_direction must be 'minimize' or 'maximize'")
+    if constraints.objective_mode not in {"score", "weighted"}:
+        raise ValueError("objective_mode must be 'score' or 'weighted'")
+    if any(
+        weight < 0
+        for weight in (constraints.score_weight, constraints.memory_weight, constraints.runtime_weight)
+    ):
+        raise ValueError("objective weights must be non-negative")
+    if constraints.objective_mode == "weighted" and (
+        constraints.score_weight + constraints.memory_weight + constraints.runtime_weight <= 0
+    ):
+        raise ValueError("weighted objective requires at least one positive objective weight")
     if not candidates_by_layer:
         raise ValueError("candidates_by_layer must not be empty")
 
@@ -70,8 +89,7 @@ def solve_nas_mip(
         joined = "; ".join(errors) if errors else "no feasible solution"
         raise RuntimeError(joined)
 
-    reverse = constraints.score_direction == "maximize"
-    return sorted(solutions, key=lambda item: item.total_score, reverse=reverse)[0]
+    return sorted(solutions, key=lambda item: item.objective)[0]
 
 
 def _solve_for_batch(
@@ -83,9 +101,7 @@ def _solve_for_batch(
     offsets = np.cumsum([0] + [len(layer) for layer in candidates_by_layer])
     num_vars = len(flat)
 
-    c = np.array([candidate.score for candidate in flat], dtype=float)
-    if constraints.score_direction == "maximize":
-        c = -c
+    c = _objective_coefficients(flat, constraints, batch_size)
 
     rows: list[np.ndarray] = []
     lower: list[float] = []
@@ -98,7 +114,8 @@ def _solve_for_batch(
         lower.append(1.0)
         upper.append(1.0)
 
-    if constraints.memory_max is not None:
+    memory_cap = _memory_cap(constraints, batch_size)
+    if memory_cap is not None:
         rows.append(
             np.array(
                 [
@@ -109,12 +126,10 @@ def _solve_for_batch(
             )
         )
         lower.append(-np.inf)
-        upper.append(float(constraints.memory_max))
+        upper.append(float(memory_cap))
 
     runtime_row = np.array([candidate.runtimes[batch_size] for candidate in flat], dtype=float)
-    runtime_cap = None
-    if constraints.latency_max is not None:
-        runtime_cap = float(constraints.latency_max)
+    runtime_cap = _latency_cap(constraints, batch_size)
     if constraints.throughput_min is not None:
         throughput_cap = batch_size * constraints.seq_len / float(constraints.throughput_min)
         runtime_cap = throughput_cap if runtime_cap is None else min(runtime_cap, throughput_cap)
@@ -146,7 +161,7 @@ def _solve_for_batch(
 
     chosen_indices = np.flatnonzero(result.x > 0.5).tolist()
     selected = [flat[index] for index in chosen_indices]
-    return _make_solution(selected, constraints, batch_size)
+    return _make_solution(selected, constraints, batch_size, objective_candidates=flat)
 
 
 def _solve_exhaustive(
@@ -161,16 +176,15 @@ def _solve_exhaustive(
         raise RuntimeError("MILP failed and exhaustive fallback is too large")
 
     best: NasSolution | None = None
+    flat: list[SearchCandidate] = [candidate for layer in candidates_by_layer for candidate in layer]
     for selected_tuple in itertools.product(*candidates_by_layer):
         selected = list(selected_tuple)
-        solution = _make_solution(selected, constraints, batch_size)
+        solution = _make_solution(selected, constraints, batch_size, objective_candidates=flat)
         if not _is_feasible(solution, constraints):
             continue
         if best is None:
             best = solution
-        elif constraints.score_direction == "minimize" and solution.total_score < best.total_score:
-            best = solution
-        elif constraints.score_direction == "maximize" and solution.total_score > best.total_score:
+        elif solution.objective < best.objective:
             best = solution
 
     if best is None:
@@ -182,12 +196,18 @@ def _make_solution(
     selected: list[SearchCandidate],
     constraints: SearchConstraints,
     batch_size: int,
+    objective_candidates: Sequence[SearchCandidate] | None = None,
 ) -> NasSolution:
     total_score = float(sum(candidate.score for candidate in selected))
     total_memory = float(sum(candidate.param_memory + batch_size * candidate.kv_cache_memory for candidate in selected))
     total_runtime = float(sum(candidate.runtimes[batch_size] for candidate in selected))
     throughput = float("inf") if total_runtime == 0 else batch_size * constraints.seq_len / total_runtime
-    objective = total_score if constraints.score_direction == "minimize" else -total_score
+    objective, objective_components = _solution_objective(
+        selected,
+        constraints,
+        batch_size,
+        objective_candidates=objective_candidates,
+    )
     return NasSolution(
         batch_size=batch_size,
         selected=selected,
@@ -196,13 +216,16 @@ def _make_solution(
         total_runtime=total_runtime,
         throughput=throughput,
         objective=objective,
+        objective_components=objective_components,
     )
 
 
 def _is_feasible(solution: NasSolution, constraints: SearchConstraints) -> bool:
-    if constraints.memory_max is not None and solution.total_memory > constraints.memory_max + 1e-8:
+    memory_cap = _memory_cap(constraints, solution.batch_size)
+    if memory_cap is not None and solution.total_memory > memory_cap + 1e-8:
         return False
-    if constraints.latency_max is not None and solution.total_runtime > constraints.latency_max + 1e-8:
+    latency_cap = _latency_cap(constraints, solution.batch_size)
+    if latency_cap is not None and solution.total_runtime > latency_cap + 1e-8:
         return False
     if constraints.throughput_min is not None and solution.throughput + 1e-8 < constraints.throughput_min:
         return False
@@ -213,3 +236,110 @@ def _is_feasible(solution: NasSolution, constraints: SearchConstraints) -> bool:
             if overlap > constraints.diversity_alpha * len(solution.selected) + 1e-8:
                 return False
     return True
+
+
+def _batch_cap(caps: dict[int, float] | None, batch_size: int) -> float | None:
+    if not caps:
+        return None
+    if batch_size in caps:
+        return float(caps[batch_size])
+    key = str(batch_size)
+    if key in caps:  # type: ignore[operator]
+        return float(caps[key])  # type: ignore[index]
+    return None
+
+
+def _memory_cap(constraints: SearchConstraints, batch_size: int) -> float | None:
+    batch_cap = _batch_cap(constraints.memory_max_by_batch, batch_size)
+    return batch_cap if batch_cap is not None else constraints.memory_max
+
+
+def _latency_cap(constraints: SearchConstraints, batch_size: int) -> float | None:
+    batch_cap = _batch_cap(constraints.latency_max_by_batch, batch_size)
+    return batch_cap if batch_cap is not None else constraints.latency_max
+
+
+def _scale(values: np.ndarray, normalize: bool) -> float:
+    if not normalize:
+        return 1.0
+    value = float(np.max(np.abs(values))) if values.size else 0.0
+    return max(value, 1e-12)
+
+
+def _objective_component_values(
+    candidates: Sequence[SearchCandidate],
+    batch_size: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    scores = np.array([candidate.score for candidate in candidates], dtype=float)
+    memory = np.array(
+        [candidate.param_memory + batch_size * candidate.kv_cache_memory for candidate in candidates],
+        dtype=float,
+    )
+    runtime = np.array([candidate.runtimes[batch_size] for candidate in candidates], dtype=float)
+    return scores, memory, runtime
+
+
+def _objective_coefficients(
+    candidates: Sequence[SearchCandidate],
+    constraints: SearchConstraints,
+    batch_size: int,
+) -> np.ndarray:
+    scores, memory, runtime = _objective_component_values(candidates, batch_size)
+    if constraints.objective_mode == "score":
+        c = scores.copy()
+        if constraints.score_direction == "maximize":
+            c = -c
+        return c
+
+    score_sign = 1.0 if constraints.score_direction == "minimize" else -1.0
+    score_term = score_sign * scores / _scale(scores, constraints.normalize_objectives)
+    memory_term = memory / _scale(memory, constraints.normalize_objectives)
+    runtime_term = runtime / _scale(runtime, constraints.normalize_objectives)
+    return (
+        constraints.score_weight * score_term
+        + constraints.memory_weight * memory_term
+        + constraints.runtime_weight * runtime_term
+    )
+
+
+def _solution_objective(
+    selected: Sequence[SearchCandidate],
+    constraints: SearchConstraints,
+    batch_size: int,
+    objective_candidates: Sequence[SearchCandidate] | None = None,
+) -> tuple[float, dict[str, float]]:
+    scores, memory, runtime = _objective_component_values(selected, batch_size)
+    total_score = float(np.sum(scores))
+    total_memory = float(np.sum(memory))
+    total_runtime = float(np.sum(runtime))
+    if constraints.objective_mode == "score":
+        objective = total_score if constraints.score_direction == "minimize" else -total_score
+        return objective, {
+            "score": total_score,
+            "memory": total_memory,
+            "runtime": total_runtime,
+            "weighted_score": objective,
+        }
+
+    reference = selected if objective_candidates is None else objective_candidates
+    reference_scores, reference_memory, reference_runtime = _objective_component_values(reference, batch_size)
+    score_sign = 1.0 if constraints.score_direction == "minimize" else -1.0
+    score_term = score_sign * scores / _scale(reference_scores, constraints.normalize_objectives)
+    memory_term = memory / _scale(reference_memory, constraints.normalize_objectives)
+    runtime_term = runtime / _scale(reference_runtime, constraints.normalize_objectives)
+    coeffs = (
+        constraints.score_weight * score_term
+        + constraints.memory_weight * memory_term
+        + constraints.runtime_weight * runtime_term
+    )
+    weighted_score = float(np.sum(coeffs))
+    return weighted_score, {
+        "score": total_score,
+        "memory": total_memory,
+        "runtime": total_runtime,
+        "weighted_score": weighted_score,
+        "score_weight": float(constraints.score_weight),
+        "memory_weight": float(constraints.memory_weight),
+        "runtime_weight": float(constraints.runtime_weight),
+        "normalized": float(1.0 if constraints.normalize_objectives else 0.0),
+    }

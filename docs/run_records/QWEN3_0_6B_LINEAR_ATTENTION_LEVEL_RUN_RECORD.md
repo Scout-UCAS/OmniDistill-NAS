@@ -53,9 +53,9 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile \
   distill_nas_core/blocks.py \
   distill_nas_core/search_space.py \
   distill_nas_core/resources.py \
-  scripts/run_qwen3_attention_search.py \
-  scripts/run_tiny_nas.py \
-  test_suite/test_blocks.py
+  tools/run_qwen3_attention_search.py \
+  tools/run_tiny_nas.py \
+  tests/test_blocks.py
 ```
 
 输出：无输出，表示通过。
@@ -63,7 +63,7 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m py_compile \
 ### 2.2 单元测试
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s test_suite
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests
 ```
 
 输出：
@@ -76,7 +76,7 @@ OK
 ### 2.3 Tiny NAS 全量候选
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 python3 scripts/run_tiny_nas.py \
+PYTHONDONTWRITEBYTECODE=1 python3 tools/run_tiny_nas.py \
   --quick \
   --bld-steps 0 \
   --score-batches 1 \
@@ -99,7 +99,7 @@ architecture:
 
 ```bash
 cd /root/autodl-tmp/PUZZLE
-PYTHONDONTWRITEBYTECODE=1 /root/miniconda3/bin/python -m unittest discover -s test_suite
+PYTHONDONTWRITEBYTECODE=1 /root/miniconda3/bin/python -m unittest discover -s tests
 ```
 
 输出：
@@ -113,7 +113,7 @@ OK
 
 ```bash
 cd /root/autodl-tmp/PUZZLE
-PYTHONDONTWRITEBYTECODE=1 /root/miniconda3/bin/python scripts/run_tiny_nas.py \
+PYTHONDONTWRITEBYTECODE=1 /root/miniconda3/bin/python tools/run_tiny_nas.py \
   --quick \
   --bld-steps 0 \
   --score-batches 1 \
@@ -142,9 +142,9 @@ PROMPT_SOURCE=mmlu \
 MODEL_VARIANTS=parent,parent_attn,mha_attn,quant_mha_attn,mqa_attn,gqa_kv2,mfa_kv2,mla_kv2,mka_attn,all_linear_attn,noop_attn \
 MAX_LAYERS=1 \
 MAX_PROMPTS=2 \
-bash workflow_steps/04_bld_block_library.sh
-WORKFLOW_BACKEND=qwen bash workflow_steps/05_nas_layer_importance.sh
-WORKFLOW_BACKEND=qwen bash workflow_steps/06_mip_topk_configs.sh
+bash scripts/04_bld_block_library.sh
+WORKFLOW_BACKEND=qwen bash scripts/05_nas_layer_importance.sh
+WORKFLOW_BACKEND=qwen bash scripts/06_mip_topk_configs.sh
 ```
 
 默认候选：
@@ -181,9 +181,9 @@ PROMPT_SOURCE=mmlu \
 MODEL_VARIANTS=parent,skip_attn,skip_mlp,skip_both,all_attention \
 MAX_LAYERS=1 \
 MAX_PROMPTS=2 \
-bash workflow_steps/04_bld_block_library.sh
-WORKFLOW_BACKEND=qwen bash workflow_steps/05_nas_layer_importance.sh
-WORKFLOW_BACKEND=qwen bash workflow_steps/06_mip_topk_configs.sh
+bash scripts/04_bld_block_library.sh
+WORKFLOW_BACKEND=qwen bash scripts/05_nas_layer_importance.sh
+WORKFLOW_BACKEND=qwen bash scripts/06_mip_topk_configs.sh
 ```
 
 后台运行时使用的日志：
@@ -225,7 +225,7 @@ fla_moba_attn
 
 ```bash
 cd /root/autodl-tmp/PUZZLE
-WORKFLOW_BACKEND=qwen bash workflow_steps/07_assemble_model_from_config.sh
+WORKFLOW_BACKEND=qwen bash scripts/07_assemble_model_from_config.sh
 ```
 
 关键输出：

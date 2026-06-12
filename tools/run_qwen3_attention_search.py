@@ -64,6 +64,7 @@ except ImportError:  # pragma: no cover - depends on transformers version
     AutoModelForVision2Seq = None
 
 from distill_nas_core.blocks import QuantizedLinear
+from distill_nas_core.distill import AUXILIARY_BATCH_KEYS, forward_batch as safe_forward_batch
 from distill_nas_core.mip import SearchCandidate, SearchConstraints, solve_nas_mip
 
 
@@ -117,6 +118,8 @@ class TaskExample:
     prompt: str
     image: Any | None = None
     target: Any | None = None
+    action: Any | None = None
+    state: Any | None = None
     metadata: dict[str, Any] | None = None
 
 
@@ -211,6 +214,13 @@ def get_first_value(example: dict[str, Any], names: tuple[str, ...]) -> Any:
     return None
 
 
+def first_present(*values: Any) -> Any:
+    for value in values:
+        if value_is_present(value):
+            return value
+    return None
+
+
 def find_nested_value(value: Any, names: tuple[str, ...], max_depth: int = 4) -> Any:
     if max_depth < 0:
         return None
@@ -272,6 +282,25 @@ IMAGE_FIELD_NAMES = (
     "image_primary",
     "image_wrist",
     "bytes",
+)
+ACTION_FIELD_NAMES = (
+    "action",
+    "actions",
+    "target_action",
+    "action_tokens",
+    "control",
+    "controls",
+    "robot_action",
+    "action_delta",
+    "delta_action",
+)
+STATE_FIELD_NAMES = (
+    "state",
+    "proprio",
+    "robot_state",
+    "observation_state",
+    "joint_state",
+    "eef_state",
 )
 
 
@@ -399,36 +428,28 @@ def format_vlm_prompt(example: dict[str, Any], source: str, include_target: bool
 
 
 def format_vla_prompt(example: dict[str, Any], include_target: bool = False) -> str:
+    instruction_names = (
+        "instruction",
+        "language_instruction",
+        "natural_language_instruction",
+        "task",
+        "prompt",
+        "goal",
+        "command",
+    )
     instruction = compact_value(
-        get_first_value(
-            example,
-            (
-                "instruction",
-                "language_instruction",
-                "natural_language_instruction",
-                "task",
-                "prompt",
-                "goal",
-                "command",
-            ),
-        )
-        or find_nested_value(
-            example,
-            (
-                "instruction",
-                "language_instruction",
-                "natural_language_instruction",
-                "task",
-                "goal",
-                "command",
-            ),
+        first_present(
+            get_first_value(example, instruction_names),
+            find_nested_value(example, instruction_names),
         )
     ).strip()
     if not instruction:
         instruction = "Complete the robot manipulation task shown in the observation."
     state = compact_value(
-        get_first_value(example, ("state", "proprio", "robot_state"))
-        or find_nested_value(example, ("state", "proprio", "robot_state"), max_depth=3)
+        first_present(
+            get_first_value(example, STATE_FIELD_NAMES),
+            find_nested_value(example, STATE_FIELD_NAMES, max_depth=3),
+        )
     ).strip()
     lines = [
         "You are a vision-language-action robot policy.",
@@ -439,9 +460,9 @@ def format_vla_prompt(example: dict[str, Any], include_target: bool = False) -> 
     lines.append("Predict the next robot action.")
     lines.append("Action:")
     if include_target:
-        action = get_first_value(
-            example,
-            ("action", "actions", "target_action", "action_tokens", "control", "controls", "robot_action"),
+        action = first_present(
+            get_first_value(example, ACTION_FIELD_NAMES),
+            find_nested_value(example, ACTION_FIELD_NAMES, max_depth=3),
         )
         if action is not None:
             lines[-1] = f"Action: {compact_value(action)}"
@@ -623,13 +644,24 @@ def format_dataset_example(
         example,
         ("answer", "answers", "label", "target", "output", "response", "caption", "action", "actions"),
     )
+    action = None
+    state = None
+    if spec.task == "vla":
+        action = first_present(
+            get_first_value(example, ACTION_FIELD_NAMES),
+            find_nested_value(example, ACTION_FIELD_NAMES, max_depth=3),
+        )
+        state = first_present(
+            get_first_value(example, STATE_FIELD_NAMES),
+            find_nested_value(example, STATE_FIELD_NAMES, max_depth=3),
+        )
     metadata = {
         "source": spec.source,
         "task": spec.task,
     }
     if "id" in example:
         metadata["id"] = compact_value(example["id"])
-    return TaskExample(prompt=prompt, image=image, target=target, metadata=metadata)
+    return TaskExample(prompt=prompt, image=image, target=target, action=action, state=state, metadata=metadata)
 
 
 def load_dataset_examples(
@@ -1975,6 +2007,40 @@ def load_multimodal_image(image: Any | None, size: int):
     return Image.new("RGB", (size, size), color=(255, 255, 255))
 
 
+def numeric_tensor_from_value(value: Any) -> torch.Tensor | None:
+    if value is None:
+        return None
+    if isinstance(value, torch.Tensor):
+        if not value.is_floating_point():
+            return value.detach().float()
+        return value.detach()
+    if isinstance(value, (int, float)):
+        return torch.tensor([value], dtype=torch.float32)
+    if isinstance(value, dict):
+        values = []
+        for item in value.values():
+            tensor = numeric_tensor_from_value(item)
+            if tensor is not None and tensor.ndim <= 1:
+                values.append(tensor.flatten())
+        if values:
+            return torch.cat(values).float()
+        return None
+    if isinstance(value, (list, tuple)):
+        try:
+            tensor = torch.as_tensor(value, dtype=torch.float32)
+        except (TypeError, ValueError):
+            flattened = []
+            for item in value:
+                tensor = numeric_tensor_from_value(item)
+                if tensor is not None:
+                    flattened.append(tensor.flatten())
+            return torch.cat(flattened).float() if flattened else None
+        if tensor.numel() == 0:
+            return None
+        return tensor.float()
+    return None
+
+
 def split_image_paths(raw: str | None) -> list[str | None]:
     if raw is None or not raw.strip():
         return [None]
@@ -1996,7 +2062,11 @@ def resolve_device(device: str) -> torch.device:
 
 def dtype_from_name(name: str, device: torch.device) -> torch.dtype:
     if name == "auto":
-        return torch.bfloat16 if device.type == "cuda" else torch.float16
+        if device.type == "cuda":
+            return torch.bfloat16
+        if device.type == "mps":
+            return torch.float16
+        return torch.float32
     return {
         "bf16": torch.bfloat16,
         "bfloat16": torch.bfloat16,
@@ -2263,6 +2333,13 @@ def make_multimodal_batches(
             add_generation_prompt=add_generation_prompt,
             model_kind=model_kind,
         )
+        if model_kind == "vla":
+            action_tensor = numeric_tensor_from_value(example.action)
+            if action_tensor is not None:
+                batch["actions"] = action_tensor.unsqueeze(0) if action_tensor.ndim == 1 else action_tensor
+            state_tensor = numeric_tensor_from_value(example.state)
+            if state_tensor is not None:
+                batch["proprio"] = state_tensor.unsqueeze(0) if state_tensor.ndim == 1 else state_tensor
         encoded.append(move_batch_to_device(batch, device))
     return encoded
 
@@ -2345,6 +2422,12 @@ def score_target_priority(model_kind: str) -> tuple[tuple[str, str], ...]:
             ("action_logits", "kl"),
             ("action_log_probs", "kl"),
             ("predicted_action_logits", "kl"),
+            ("action_mean", "mse"),
+            ("action_means", "mse"),
+            ("predicted_action_mean", "mse"),
+            ("predicted_action_means", "mse"),
+            ("action_mu", "mse"),
+            ("action_mus", "mse"),
             ("actions", "mse"),
             ("action", "mse"),
             ("predicted_actions", "mse"),
@@ -2399,7 +2482,7 @@ def precompute_parent_targets(model, batches, model_kind: str) -> list[ScoreTarg
     outputs = []
     with torch.inference_mode():
         for batch in batches:
-            model_output = model(**batch, use_cache=False)
+            model_output = safe_forward_batch(model, batch, use_cache=False)
             target = extract_score_target(model_output, model_kind=model_kind)
             outputs.append(ScoreTarget(target.name, target.tensor.detach().cpu(), target.metric))
     return outputs
@@ -2496,7 +2579,7 @@ def score_variant(
     try:
         with torch.inference_mode():
             for batch, teacher_target in zip(batches, parent_targets, strict=True):
-                child_output = model(**batch, use_cache=False)
+                child_output = safe_forward_batch(model, batch, use_cache=False)
                 score = score_target_distance(teacher_target, child_output, model_kind=model_kind)
                 values.append(float(score.detach().cpu()))
     finally:
