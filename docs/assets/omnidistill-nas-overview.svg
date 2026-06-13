@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="680" viewBox="0 0 1180 680" role="img" aria-labelledby="title desc">
+  <title id="title">OmniDistill-NAS system overview</title>
+  <desc id="desc">Architecture diagram showing data and model inputs, candidate generation, distillation scoring, constrained search, global distillation, evaluation, export, and extension points.</desc>
+  <defs>
+    <linearGradient id="panel" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0" stop-color="#f8fafc"/>
+      <stop offset="1" stop-color="#eef6f3"/>
+    </linearGradient>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto">
+      <path d="M2 2 L10 6 L2 10 Z" fill="#1f2937"/>
+    </marker>
+    <filter id="shadow" x="-10%" y="-15%" width="120%" height="140%">
+      <feDropShadow dx="0" dy="8" stdDeviation="8" flood-color="#0f172a" flood-opacity="0.12"/>
+    </filter>
+  </defs>
+
+  <rect width="1180" height="680" fill="#ffffff"/>
+  <rect x="36" y="34" width="1108" height="612" rx="26" fill="url(#panel)" stroke="#cbd5e1"/>
+
+  <g font-family="Inter, Arial, sans-serif">
+    <text x="76" y="86" font-size="30" font-weight="700" fill="#0f172a">OmniDistill-NAS</text>
+    <text x="76" y="116" font-size="16" fill="#475569">Distillation-guided architecture search for LLM, VLM, and VLA inference experiments</text>
+  </g>
+
+  <g filter="url(#shadow)" font-family="Inter, Arial, sans-serif">
+    <rect x="76" y="158" width="220" height="132" rx="14" fill="#ffffff" stroke="#cbd5e1"/>
+    <text x="100" y="196" font-size="18" font-weight="700" fill="#0f172a">Inputs</text>
+    <text x="100" y="226" font-size="14" fill="#475569">teacher checkpoints</text>
+    <text x="100" y="250" font-size="14" fill="#475569">token, image, action batches</text>
+    <text x="100" y="274" font-size="14" fill="#475569">experiment and benchmark specs</text>
+
+    <rect x="360" y="142" width="232" height="164" rx="14" fill="#eff6ff" stroke="#60a5fa"/>
+    <text x="386" y="180" font-size="18" font-weight="700" fill="#0f172a">Candidate Library</text>
+    <text x="386" y="210" font-size="14" fill="#334155">attention variants</text>
+    <text x="386" y="234" font-size="14" fill="#334155">FFN pruning and substitutes</text>
+    <text x="386" y="258" font-size="14" fill="#334155">layer skip policies</text>
+    <text x="386" y="282" font-size="14" fill="#334155">optional quantized blocks</text>
+
+    <rect x="656" y="142" width="232" height="164" rx="14" fill="#ecfdf5" stroke="#34d399"/>
+    <text x="682" y="180" font-size="18" font-weight="700" fill="#0f172a">Scoring</text>
+    <text x="682" y="210" font-size="14" fill="#334155">replace-one-layer probes</text>
+    <text x="682" y="234" font-size="14" fill="#334155">KL, MSE, OPD targets</text>
+    <text x="682" y="258" font-size="14" fill="#334155">memory and runtime proxies</text>
+    <text x="682" y="282" font-size="14" fill="#334155">per-layer importance</text>
+
+    <rect x="76" y="382" width="220" height="132" rx="14" fill="#fffbeb" stroke="#f59e0b"/>
+    <text x="100" y="420" font-size="18" font-weight="700" fill="#0f172a">Search</text>
+    <text x="100" y="450" font-size="14" fill="#475569">MIP constraints</text>
+    <text x="100" y="474" font-size="14" fill="#475569">top-K architectures</text>
+    <text x="100" y="498" font-size="14" fill="#475569">Pareto frontier sweeps</text>
+
+    <rect x="360" y="366" width="232" height="164" rx="14" fill="#fef2f2" stroke="#fb7185"/>
+    <text x="386" y="404" font-size="18" font-weight="700" fill="#0f172a">Student Build</text>
+    <text x="386" y="434" font-size="14" fill="#475569">assemble selected config</text>
+    <text x="386" y="458" font-size="14" fill="#475569">global knowledge distillation</text>
+    <text x="386" y="482" font-size="14" fill="#475569">optional OPD alignment</text>
+    <text x="386" y="506" font-size="14" fill="#475569">checkpointed artifacts</text>
+
+    <rect x="656" y="366" width="232" height="164" rx="14" fill="#f5f3ff" stroke="#a78bfa"/>
+    <text x="682" y="404" font-size="18" font-weight="700" fill="#0f172a">Evidence</text>
+    <text x="682" y="434" font-size="14" fill="#475569">evaluation metrics</text>
+    <text x="682" y="458" font-size="14" fill="#475569">profiling reports</text>
+    <text x="682" y="482" font-size="14" fill="#475569">export manifest</text>
+    <text x="682" y="506" font-size="14" fill="#475569">result zoo records</text>
+
+    <rect x="942" y="216" width="158" height="238" rx="14" fill="#ffffff" stroke="#cbd5e1"/>
+    <text x="966" y="254" font-size="18" font-weight="700" fill="#0f172a">Extensible</text>
+    <text x="966" y="284" font-size="14" fill="#475569">attention plugins</text>
+    <text x="966" y="308" font-size="14" fill="#475569">dataset adapters</text>
+    <text x="966" y="332" font-size="14" fill="#475569">exporters</text>
+    <text x="966" y="356" font-size="14" fill="#475569">evaluators</text>
+    <text x="966" y="380" font-size="14" fill="#475569">tracking sinks</text>
+    <text x="966" y="404" font-size="14" fill="#475569">device policies</text>
+  </g>
+
+  <g stroke="#1f2937" stroke-width="2.5" fill="none" marker-end="url(#arrow)">
+    <path d="M296 224 H356"/>
+    <path d="M592 224 H652"/>
+    <path d="M772 306 V362"/>
+    <path d="M656 448 H596"/>
+    <path d="M360 448 H300"/>
+    <path d="M888 224 H938"/>
+    <path d="M888 448 H938"/>
+  </g>
+
+  <g font-family="Inter, Arial, sans-serif" font-size="13" fill="#64748b">
+    <text x="76" y="590">Runs on the toy backend for local CI, then scales to Qwen text, Qwen-VL, and OpenVLA smoke suites on GPU hosts.</text>
+    <text x="76" y="618">Every stage writes structured JSON, Markdown, SVG, or export manifests so experiments can be resumed, audited, and compared.</text>
+  </g>
+</svg>
