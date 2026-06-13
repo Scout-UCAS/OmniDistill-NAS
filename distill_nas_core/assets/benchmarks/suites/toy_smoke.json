@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "name": "toy-smoke",
+  "description": "Fast CPU/MPS-safe benchmark for the full staged toy OmniDistill-NAS workflow.",
+  "benchmarks": [
+    {
+      "id": "toy_full_workflow",
+      "task": "language-model-compression",
+      "backend": "toy",
+      "config": "../../configs/toy_experiment.json",
+      "tags": ["toy", "ci", "full-workflow"],
+      "expected_metrics": [
+        "perplexity",
+        "parameter_memory_bytes",
+        "throughput_tokens_per_second",
+        "num_pareto_solutions"
+      ]
+    }
+  ]
+}

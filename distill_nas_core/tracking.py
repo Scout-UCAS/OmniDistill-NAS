@@ -4,9 +4,26 @@ import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .artifacts import resolve_path
+
+
+TrackingProvider = Callable[[str, dict[str, Any] | None], dict[str, Any]]
+TRACKING_PROVIDERS: dict[str, TrackingProvider] = {}
+
+
+def register_tracking_provider(name: str, provider: TrackingProvider) -> None:
+    if not name:
+        raise ValueError("tracking provider name must be non-empty")
+    TRACKING_PROVIDERS[name] = provider
+
+
+def get_tracking_provider(name: str) -> TrackingProvider:
+    try:
+        return TRACKING_PROVIDERS[name]
+    except KeyError as exc:
+        raise ValueError(f"unknown tracking provider: {name}") from exc
 
 
 def tracking_event(event: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -32,6 +49,8 @@ def emit_tracking_event(event: str, payload: dict[str, Any] | None = None) -> di
     if provider == "jsonl":
         path = os.environ.get("OMNIDISTILL_TRACKING_FILE", "outputs/omnidistill_events.jsonl")
         return {"provider": "jsonl", "status": "written", "path": str(write_jsonl_event(path, event, payload))}
+    if provider in TRACKING_PROVIDERS:
+        return get_tracking_provider(provider)(event, payload)
     if provider in {"wandb", "mlflow", "tensorboard"}:
         return {
             "provider": provider,
@@ -39,4 +58,3 @@ def emit_tracking_event(event: str, payload: dict[str, Any] | None = None) -> di
             "message": f"Install and configure {provider} integration, or use OMNIDISTILL_TRACKING=jsonl.",
         }
     return {"provider": provider, "status": "unknown_provider"}
-

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import math
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import torch
 from torch import nn
@@ -12,6 +12,23 @@ from .resources import parameter_memory_bytes
 from .scoring import causal_lm_loss
 from .toy import TinyCausalLM, TinyConfig, random_token_batches
 from .toy_assembly import assemble_student_from_bld
+
+
+Evaluator = Callable[..., dict[str, Any]]
+EVALUATORS: dict[str, Evaluator] = {}
+
+
+def register_evaluator(name: str, evaluator: Evaluator) -> None:
+    if not name:
+        raise ValueError("evaluator name must be non-empty")
+    EVALUATORS[name] = evaluator
+
+
+def get_evaluator(name: str) -> Evaluator:
+    try:
+        return EVALUATORS[name]
+    except KeyError as exc:
+        raise ValueError(f"unknown evaluator: {name}") from exc
 
 
 def _config_from_dict(raw: dict[str, Any]) -> TinyConfig:
@@ -97,7 +114,7 @@ def evaluate_toy_artifact(
         num_batches=num_batches,
         seed=seed,
     )
-    metrics = evaluate_lm_model(model, batches, device=device)
+    metrics: dict[str, Any] = dict(evaluate_lm_model(model, batches, device=device))
     metrics.update(
         {
             "stage": payload.get("stage"),
@@ -139,6 +156,16 @@ def evaluate_artifact(
     resolved_backend = backend
     if backend == "auto":
         resolved_backend = str(payload.get("backend") or "toy")
+    if resolved_backend in EVALUATORS:
+        return get_evaluator(resolved_backend)(
+            artifact_pth,
+            backend=resolved_backend,
+            device=device,
+            seq_len=seq_len,
+            batch_size=batch_size,
+            num_batches=num_batches,
+            seed=seed,
+        )
     if resolved_backend == "toy" and "model_state_dict" in payload and "config" in payload:
         return evaluate_toy_artifact(
             artifact_pth,

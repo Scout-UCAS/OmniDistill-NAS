@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,11 +14,13 @@ import torch
 from distill_nas_core.benchmarks import load_benchmark_suite, run_benchmark_suite
 from distill_nas_core.cli import main as cli_main
 from distill_nas_core.data_adapters import load_examples
-from distill_nas_core.evaluation import evaluate_artifact
+from distill_nas_core.distributed import DevicePlan, make_device_plan, register_device_policy
+from distill_nas_core.evaluation import evaluate_artifact, register_evaluator
 from distill_nas_core.experiment import build_stage_plan, run_experiment
-from distill_nas_core.export import export_artifact, load_export_manifest
-from distill_nas_core.plugins import list_plugins, register_plugin
+from distill_nas_core.export import export_artifact, load_export_manifest, register_exporter
+from distill_nas_core.plugins import list_plugins, load_plugin_manifest, register_plugin
 from distill_nas_core.profiler import profile_artifact
+from distill_nas_core.quantization import QuantizationDecision, evaluate_quantization_plan, register_quantization_plan
 from distill_nas_core.reporting import write_workflow_report
 from distill_nas_core.result_zoo import load_result_manifests, write_result_index
 from distill_nas_core.schema import validate_benchmark_suite, validate_experiment_spec, validate_result_manifest
@@ -28,6 +31,8 @@ from distill_nas_core.search_space import (
     register_attention_variant,
 )
 from distill_nas_core.toy import TinyCausalLM, TinyConfig
+from distill_nas_core.tracking import emit_tracking_event, register_tracking_provider
+from distill_nas_core.vla import register_rollout_adapter, rollout_with_adapter
 
 
 def write_toy_artifact(path: Path) -> None:
@@ -46,6 +51,25 @@ def write_toy_artifact(path: Path) -> None:
         },
         path,
     )
+
+
+class UnitActionPolicy(torch.nn.Module):
+    def forward(self, _batch):
+        return {"actions": torch.tensor([1.0])}
+
+
+class UnitRolloutEnv:
+    def __init__(self, reward: float = 1.0) -> None:
+        self.reward = reward
+        self.steps = 0
+
+    def reset(self):
+        self.steps = 0
+        return torch.tensor([0.0])
+
+    def step(self, action):
+        self.steps += 1
+        return torch.tensor([float(action.sum())]), self.reward, True, {"success": True}
 
 
 class PlatformToolsTest(unittest.TestCase):
@@ -78,6 +102,14 @@ class PlatformToolsTest(unittest.TestCase):
             self.assertEqual([stage.name for stage in plan], ["bld", "evaluate"])
             results = run_experiment(spec, dry_run=True)
             self.assertEqual([item["status"] for item in results], ["dry_run", "dry_run"])
+
+    def test_experiment_spec_can_use_default_stages(self) -> None:
+        spec = {"backend": "toy"}
+
+        self.assertEqual(validate_experiment_spec(spec), [])
+        plan = build_stage_plan(spec)
+        self.assertEqual(plan[0].name, "prepare")
+        self.assertEqual(plan[-1].name, "report")
 
     def test_experiment_relative_outputs_use_workdir(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
@@ -131,6 +163,17 @@ class PlatformToolsTest(unittest.TestCase):
         self.assertEqual(payload[0]["status"], "dry_run")
         self.assertIn(str(workspace / "workflow"), payload[0]["outputs"][0])
 
+    def test_cli_validate_accepts_yaml_experiment(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            config = Path(tmp) / "experiment.yaml"
+            config.write_text("backend: toy\nstages: [bld]\n", encoding="utf-8")
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = cli_main(["validate", str(config)])
+
+        self.assertEqual(exit_code, 0)
+        self.assertEqual(json.loads(stdout.getvalue())["kind"], "experiment")
+
     def test_pyproject_declares_console_entrypoints_and_license(self) -> None:
         pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
         text = pyproject.read_text(encoding="utf-8")
@@ -138,6 +181,7 @@ class PlatformToolsTest(unittest.TestCase):
         self.assertIn('license = "MIT"', text)
         self.assertIn('omnidistill = "distill_nas_core.cli:main"', text)
         self.assertIn('readme = "README.md"', text)
+        self.assertIn("distill_nas_core.assets", text)
 
     def test_public_schema_validators_accept_project_manifests(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -160,6 +204,8 @@ class PlatformToolsTest(unittest.TestCase):
             self.assertTrue((Path(tmp) / "runs" / "benchmark_results.json").exists())
 
         self.assertEqual(payload["benchmarks"][0]["status"], "dry_run")
+        self.assertEqual(payload["benchmarks"][0]["workflow_dir"], str(Path(tmp) / "runs" / "toy_full_workflow" / "workflow"))
+        self.assertIn(str(Path(tmp) / "runs" / "toy_full_workflow" / "workflow"), payload["benchmarks"][0]["results"][3]["outputs"][0])
 
         stdout = io.StringIO()
         with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(stdout):
@@ -175,6 +221,46 @@ class PlatformToolsTest(unittest.TestCase):
             )
         self.assertEqual(exit_code, 0)
         self.assertIn("toy_full_workflow", stdout.getvalue())
+
+    def test_benchmark_python_command_uses_current_interpreter(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            suite = Path(tmp) / "suite.json"
+            suite.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "name": "external-python-smoke",
+                        "benchmarks": [
+                            {
+                                "id": "help",
+                                "task": "external",
+                                "backend": "qwen",
+                                "command": ["python3", "-c", "print('ok')"],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            payload = run_benchmark_suite(suite, result_dir=Path(tmp) / "runs", dry_run=True)
+
+        self.assertEqual(payload["benchmarks"][0]["command"][0], sys.executable)
+
+    def test_cli_default_benchmark_uses_packaged_assets_outside_repo(self) -> None:
+        old_cwd = Path.cwd()
+        stdout = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp:
+            try:
+                os.chdir(tmp)
+                with contextlib.redirect_stdout(stdout):
+                    exit_code = cli_main(["benchmark", "--dry-run", "--result-dir", str(Path(tmp) / "runs")])
+            finally:
+                os.chdir(old_cwd)
+
+        self.assertEqual(exit_code, 0)
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload["benchmarks"][0]["id"], "toy_full_workflow")
+        self.assertEqual(payload["benchmarks"][0]["workflow_dir"], str(Path(tmp) / "runs" / "toy_full_workflow" / "workflow"))
 
     def test_result_zoo_report_and_tracking(self) -> None:
         root = Path(__file__).resolve().parents[1]
@@ -207,6 +293,92 @@ class PlatformToolsTest(unittest.TestCase):
         register_plugin("unit-test-evaluator", "evaluator", "Unit test evaluator.")
         names = {item["name"] for item in list_plugins("evaluator")}
         self.assertIn("unit-test-evaluator", names)
+
+    def test_plugin_manifest_activates_dataset_entrypoint(self) -> None:
+        load_plugin_manifest(
+            {
+                "plugins": [
+                    {
+                        "name": "manifest-built-in",
+                        "category": "dataset",
+                        "description": "Built-in dataset adapter exposed through the plugin manifest.",
+                        "entrypoint": "distill_nas_core.data_adapters:load_builtin_examples",
+                    }
+                ]
+            }
+        )
+
+        examples = load_examples("manifest-built-in", {})
+        self.assertGreater(len(examples), 0)
+        self.assertIn("architecture search", examples[0].prompt)
+
+    def test_callable_extension_registries_are_executable(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            artifact = root / "custom_backend.pth"
+            torch.save({"stage": "custom", "backend": "unit-eval"}, artifact)
+
+            def evaluator(path, **kwargs):
+                return {"artifact": str(path), "backend": kwargs["backend"], "num_batches": kwargs["num_batches"]}
+
+            register_evaluator("unit-eval", evaluator)
+            self.assertEqual(evaluate_artifact(artifact, backend="unit-eval", num_batches=3)["num_batches"], 3)
+
+            def exporter(path, export_dir, include_state_dict=True):
+                target = Path(export_dir)
+                target.mkdir(parents=True, exist_ok=True)
+                (target / "custom.txt").write_text(str(path), encoding="utf-8")
+                return {"format": "unit-export", "include_state_dict": include_state_dict}
+
+            register_exporter("unit-export", exporter)
+            self.assertEqual(export_artifact(artifact, root / "custom_export", export_format="unit-export")["format"], "unit-export")
+
+        captured: list[dict[str, object]] = []
+
+        def tracker(event, payload):
+            captured.append({"event": event, "payload": payload or {}})
+            return {"provider": "unit-tracker", "status": "captured", "count": len(captured)}
+
+        old_provider = os.environ.get("OMNIDISTILL_TRACKING")
+        os.environ["OMNIDISTILL_TRACKING"] = "unit-tracker"
+        try:
+            register_tracking_provider("unit-tracker", tracker)
+            result = emit_tracking_event("unit-event", {"ok": True})
+        finally:
+            if old_provider is None:
+                os.environ.pop("OMNIDISTILL_TRACKING", None)
+            else:
+                os.environ["OMNIDISTILL_TRACKING"] = old_provider
+        self.assertEqual(result["status"], "captured")
+        self.assertEqual(captured[0]["event"], "unit-event")
+
+    def test_quantization_device_and_rollout_extension_points(self) -> None:
+        def quantization_plan(_linear, _inputs, options):
+            return QuantizationDecision(plan="unit-plan", use_quantized=False, num_bits=int(options.get("num_bits", 8)))
+
+        register_quantization_plan("unit-plan", quantization_plan)
+        linear = torch.nn.Linear(4, 4)
+        decision = evaluate_quantization_plan(linear, [torch.randn(2, 4)], plan="unit-plan", num_bits=6)
+        self.assertFalse(decision.use_quantized)
+        self.assertEqual(decision.num_bits, 6)
+
+        def cpu_teacher_policy(options):
+            return DevicePlan(
+                teacher_device=torch.device("cpu"),
+                student_device=torch.device(str(options.get("device", "cpu"))),
+                gradient_accumulation_steps=2,
+                use_accelerate=False,
+            )
+
+        register_device_policy("cpu-teacher", cpu_teacher_policy)
+        device_plan = make_device_plan(device="cpu", policy="cpu-teacher")
+        self.assertEqual(device_plan.teacher_device.type, "cpu")
+        self.assertEqual(device_plan.gradient_accumulation_steps, 2)
+
+        register_rollout_adapter("unit-env", lambda config: UnitRolloutEnv(reward=float(config.get("reward", 1.0))))
+        rollout = rollout_with_adapter("unit-env", UnitActionPolicy(), {"reward": 2.5}, max_steps=3)
+        self.assertTrue(rollout.success)
+        self.assertEqual(rollout.total_reward, 2.5)
 
     def test_attention_variant_plugin_registration(self) -> None:
         def spec_factory(name: str, _parent_num_heads: int) -> AttentionSpec:

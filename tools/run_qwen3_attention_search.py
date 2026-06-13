@@ -888,6 +888,7 @@ class QwenCandidateLayer(nn.Module):
             raise ValueError(f"unknown variant: {variant}")
         self.base_layer = base_layer
         self.variant = variant
+        self.attention_type = getattr(base_layer, "attention_type", "full_attention")
         self.fla_attn = None
         self.qwen_attn = None
         if is_qwen_attention_variant(variant) and variant not in {"parent_attn", "noop_attn"}:
@@ -906,6 +907,10 @@ class QwenCandidateLayer(nn.Module):
                 feature_map=fla_feature_map,
             )
 
+    @staticmethod
+    def _hidden_state(output):
+        return output[0] if isinstance(output, tuple) else output
+
     def forward(
         self,
         hidden_states: torch.Tensor,
@@ -919,26 +924,23 @@ class QwenCandidateLayer(nn.Module):
         **kwargs,
     ):
         if self.variant in {"parent", "parent_attn"}:
-            return self.base_layer(
-                hidden_states,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_value=past_key_value,
-                output_attentions=output_attentions,
-                use_cache=use_cache,
-                cache_position=cache_position,
-                position_embeddings=position_embeddings,
-                **kwargs,
+            return self._hidden_state(
+                self.base_layer(
+                    hidden_states,
+                    attention_mask=attention_mask,
+                    position_ids=position_ids,
+                    past_key_value=past_key_value,
+                    output_attentions=output_attentions,
+                    use_cache=use_cache,
+                    cache_position=cache_position,
+                    position_embeddings=position_embeddings,
+                    **kwargs,
+                )
             )
 
         if self.variant in {"skip_attn", "skip_both", "noop_attn"}:
-            outputs = (hidden_states,)
-            if output_attentions:
-                outputs += (None,)
-            if use_cache:
-                outputs += (past_key_value,)
             if self.variant == "skip_both":
-                return outputs
+                return hidden_states
         elif is_qwen_attention_variant(self.variant):
             residual = hidden_states
             hidden_states = self.base_layer.input_layernorm(hidden_states)
@@ -985,24 +987,13 @@ class QwenCandidateLayer(nn.Module):
             hidden_states = residual + attn_outputs[0]
 
         if self.variant == "skip_mlp":
-            outputs = (hidden_states,)
-            if output_attentions:
-                outputs += (attn_outputs[1],)
-            if use_cache:
-                cache_index = 2 if output_attentions else 1
-                outputs += (attn_outputs[cache_index],)
-            return outputs
+            return hidden_states
 
         residual = hidden_states
         hidden_states = self.base_layer.post_attention_layernorm(hidden_states)
         hidden_states = self.base_layer.mlp(hidden_states)
         hidden_states = residual + hidden_states
-        outputs = (hidden_states,)
-        if output_attentions:
-            outputs += (None,)
-        if use_cache:
-            outputs += (past_key_value,)
-        return outputs
+        return hidden_states
 
 
 class QwenLinearAttentionSubblock(nn.Module):
@@ -1824,16 +1815,25 @@ def load_multimodal_model_from_candidates(
     cache_dir: Path,
 ) -> nn.Module:
     errors = []
+    base_kwargs = {
+        "torch_dtype": dtype,
+        "trust_remote_code": True,
+        "cache_dir": str(cache_dir),
+    }
     for model_cls in model_classes:
         try:
-            return model_cls.from_pretrained(
-                model_id,
-                torch_dtype=dtype,
-                trust_remote_code=True,
-                cache_dir=str(cache_dir),
-            )
+            return model_cls.from_pretrained(model_id, **base_kwargs)
         except Exception as exc:
             errors.append(f"{model_cls.__name__}: {type(exc).__name__}: {exc}")
+            if "_supports_sdpa" not in str(exc):
+                continue
+            try:
+                return model_cls.from_pretrained(model_id, **base_kwargs, attn_implementation="eager")
+            except Exception as fallback_exc:
+                errors.append(
+                    f"{model_cls.__name__}(attn_implementation=eager): "
+                    f"{type(fallback_exc).__name__}: {fallback_exc}"
+                )
     joined = " | ".join(errors)
     raise RuntimeError(f"failed to load multimodal model {model_id!r}. Tried: {joined}")
 
@@ -1950,15 +1950,28 @@ def has_qwen_attention_config(config: Any) -> bool:
     return has_hidden and has_heads
 
 
-def move_batch_to_device(batch: dict[str, Any], device: torch.device) -> dict[str, Any]:
+def move_tensor_to_device(value: torch.Tensor, device: torch.device, dtype: torch.dtype | None = None) -> torch.Tensor:
+    target_dtype = dtype if (value.is_floating_point() or value.is_complex()) else None
+    if target_dtype is None:
+        return value.to(device)
+    return value.to(device=device, dtype=target_dtype)
+
+
+def move_batch_to_device(
+    batch: dict[str, Any],
+    device: torch.device,
+    dtype: torch.dtype | None = None,
+) -> dict[str, Any]:
     moved = {}
     for key, value in batch.items():
         if isinstance(value, torch.Tensor):
-            moved[key] = value.to(device)
+            moved[key] = move_tensor_to_device(value, device, dtype=dtype)
         elif isinstance(value, dict):
-            moved[key] = move_batch_to_device(value, device)
+            moved[key] = move_batch_to_device(value, device, dtype=dtype)
         elif isinstance(value, (list, tuple)):
-            moved[key] = type(value)(item.to(device) if isinstance(item, torch.Tensor) else item for item in value)
+            moved[key] = type(value)(
+                move_tensor_to_device(item, device, dtype=dtype) if isinstance(item, torch.Tensor) else item for item in value
+            )
         else:
             moved[key] = value
     return moved
@@ -2313,6 +2326,7 @@ def make_multimodal_batches(
     add_generation_prompt: bool,
     model_kind: str,
     allow_blank_image: bool,
+    dtype: torch.dtype | None = None,
 ) -> list[dict[str, Any]]:
     image_paths = split_image_paths(image_path)
     encoded = []
@@ -2340,7 +2354,7 @@ def make_multimodal_batches(
             state_tensor = numeric_tensor_from_value(example.state)
             if state_tensor is not None:
                 batch["proprio"] = state_tensor.unsqueeze(0) if state_tensor.ndim == 1 else state_tensor
-        encoded.append(move_batch_to_device(batch, device))
+        encoded.append(move_batch_to_device(batch, device, dtype=dtype))
     return encoded
 
 
@@ -2349,6 +2363,7 @@ def make_batches(
     examples: list[TaskExample],
     seq_len: int,
     device: torch.device,
+    dtype: torch.dtype,
     args: argparse.Namespace,
 ) -> list[dict[str, Any]]:
     if loaded.model_kind in {"vlm", "vla"}:
@@ -2366,6 +2381,7 @@ def make_batches(
             add_generation_prompt=not args.no_vlm_generation_prompt,
             model_kind=loaded.model_kind,
             allow_blank_image=allow_blank_image,
+            dtype=dtype,
         )
     if loaded.tokenizer is None:
         raise RuntimeError("text mode requires a tokenizer")
@@ -2711,7 +2727,7 @@ def main() -> None:
     language_config = loaded.language_config
     layer_indices = iter_layer_indices(len(layers), args.max_layers, args.layer_stride)
     examples, prompt_metadata = load_prompts_from_args(args, loaded.model_kind)
-    batches = make_batches(loaded, examples, args.seq_len, device, args)
+    batches = make_batches(loaded, examples, args.seq_len, device, dtype, args)
     parent_targets = precompute_parent_targets(model, batches, model_kind=loaded.model_kind)
 
     dtype_bytes = dtype_nbytes(dtype)

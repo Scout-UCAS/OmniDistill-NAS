@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import torch
 
+from .blocks import TransformerBlock
 from .search_space import AttentionSpec, BlockSpec, FFNSpec, make_block_variant
 from .toy import TinyCausalLM, TinyConfig
 
@@ -44,7 +45,8 @@ def reconstruct_block(
     spec: BlockSpec,
     state_dict: dict[str, torch.Tensor],
 ) -> torch.nn.Module:
-    block = make_block_variant(parent.blocks[layer_idx], spec, ffn_channel_order=None)
+    parent_block = cast(TransformerBlock, parent.blocks[layer_idx])
+    block = make_block_variant(parent_block, spec, ffn_channel_order=None)
     block.load_state_dict(state_dict)
     return block
 

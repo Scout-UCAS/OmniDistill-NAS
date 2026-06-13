@@ -4,7 +4,7 @@ import json
 import shutil
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import torch
 
@@ -13,12 +13,38 @@ from .artifacts import file_sha256, load_torch_artifact, metadata_view, resolve_
 
 EXPORT_FORMAT_VERSION = 1
 
+Exporter = Callable[..., dict[str, Any]]
+EXPORTERS: dict[str, Exporter] = {}
+
+
+def register_exporter(name: str, exporter: Exporter) -> None:
+    if not name:
+        raise ValueError("exporter name must be non-empty")
+    EXPORTERS[name] = exporter
+
+
+def get_exporter(name: str) -> Exporter:
+    try:
+        return EXPORTERS[name]
+    except KeyError as exc:
+        raise ValueError(f"unknown exporter: {name}") from exc
+
 
 def export_artifact(
     artifact_pth: str | Path,
     export_dir: str | Path,
     include_state_dict: bool = True,
+    export_format: str = "omnidistill",
+    **export_options: Any,
 ) -> dict[str, Any]:
+    if export_format not in {"omnidistill", "omnidistill-nas"}:
+        return get_exporter(export_format)(
+            artifact_pth,
+            export_dir,
+            include_state_dict=include_state_dict,
+            **export_options,
+        )
+
     source = resolve_path(artifact_pth)
     target_dir = resolve_path(export_dir)
     target_dir.mkdir(parents=True, exist_ok=True)

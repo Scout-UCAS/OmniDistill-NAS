@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
-from typing import Iterable
+from typing import Iterable, cast
 
 import torch
 from torch import nn
@@ -32,16 +32,16 @@ class TinyCausalLM(nn.Module):
     def __init__(self, config: TinyConfig) -> None:
         super().__init__()
         self.config = config
-        self.token_embedding = nn.Embedding(config.vocab_size, config.hidden_size)
-        self.position_embedding = nn.Embedding(config.max_seq_len, config.hidden_size)
-        self.blocks = nn.ModuleList(
+        self.token_embedding: nn.Embedding = nn.Embedding(config.vocab_size, config.hidden_size)
+        self.position_embedding: nn.Embedding = nn.Embedding(config.max_seq_len, config.hidden_size)
+        self.blocks: nn.ModuleList = nn.ModuleList(
             [
                 make_parent_block(config.hidden_size, config.num_heads, config.intermediate_size)
                 for _ in range(config.num_layers)
             ]
         )
-        self.final_norm = nn.LayerNorm(config.hidden_size)
-        self.lm_head = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
+        self.final_norm: nn.LayerNorm = nn.LayerNorm(config.hidden_size)
+        self.lm_head: nn.Linear = nn.Linear(config.hidden_size, config.vocab_size, bias=False)
 
     def forward(self, input_ids: torch.Tensor, output_hidden_states: bool = False) -> TinyOutput:
         batch, seq_len = input_ids.shape
@@ -49,7 +49,7 @@ class TinyCausalLM(nn.Module):
         hidden = self.token_embedding(input_ids) + self.position_embedding(positions)
         hidden_states = [hidden] if output_hidden_states else []
         for block in self.blocks:
-            hidden = block(hidden)
+            hidden = cast(TransformerBlock, block)(hidden)
             if output_hidden_states:
                 hidden_states.append(hidden)
         hidden = self.final_norm(hidden)
@@ -109,4 +109,3 @@ def collect_ffn_norm_inputs(
             after_attention = hidden + block.attention(block.ln_1(hidden))
             normalized.append(block.ln_2(after_attention).detach().cpu())
     return normalized
-

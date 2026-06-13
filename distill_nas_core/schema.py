@@ -15,7 +15,7 @@ EXPERIMENT_SCHEMA: dict[str, Any] = {
     "$schema": "https://json-schema.org/draft/2020-12/schema",
     "title": "OmniDistill-NAS experiment spec",
     "type": "object",
-    "required": ["backend", "stages"],
+    "required": ["backend"],
     "properties": {
         "name": {"type": "string"},
         "backend": {"type": "string"},
@@ -117,9 +117,7 @@ def validate_experiment_spec(spec: dict[str, Any]) -> list[str]:
     elif not isinstance(spec["backend"], str):
         errors.append("'backend' must be a string")
     stages = spec.get("stages")
-    if stages is None:
-        errors.append("experiment spec must include 'stages'")
-    elif not isinstance(stages, str) and not _is_string_list(stages):
+    if stages is not None and not isinstance(stages, str) and not _is_string_list(stages):
         errors.append("'stages' must be a comma-separated string or list of strings")
     for key in ("model", "search", "distillation", "devices", "distributed", "evaluation", "profiling", "env"):
         if key in spec and not _is_mapping(spec[key]):
@@ -200,8 +198,24 @@ def load_json_file(path: str | Path) -> dict[str, Any]:
     return payload
 
 
-def validate_json_file(path: str | Path, kind: str) -> list[str]:
-    payload = load_json_file(path)
+def load_config_file(path: str | Path) -> dict[str, Any]:
+    resolved = resolve_path(path)
+    text = resolved.read_text(encoding="utf-8")
+    if resolved.suffix.lower() in {".yaml", ".yml"}:
+        try:
+            import yaml  # type: ignore[import-untyped]
+        except ImportError as exc:  # pragma: no cover - depends on environment
+            raise RuntimeError("YAML validation requires PyYAML") from exc
+        payload = yaml.safe_load(text)
+    else:
+        payload = json.loads(text)
+    if not isinstance(payload, dict):
+        raise SchemaError(f"expected object at {resolved}")
+    return payload
+
+
+def validate_config_file(path: str | Path, kind: str) -> list[str]:
+    payload = load_config_file(path)
     if kind == "experiment":
         return validate_experiment_spec(payload)
     if kind == "benchmark":
@@ -210,3 +224,6 @@ def validate_json_file(path: str | Path, kind: str) -> list[str]:
         return validate_result_manifest(payload)
     raise ValueError(f"unknown schema kind: {kind}")
 
+
+def validate_json_file(path: str | Path, kind: str) -> list[str]:
+    return validate_config_file(path, kind)

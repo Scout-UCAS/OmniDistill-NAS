@@ -108,9 +108,9 @@ def _solve_for_batch(
     upper: list[float] = []
 
     for layer_idx in range(len(candidates_by_layer)):
-        row = np.zeros(num_vars)
-        row[offsets[layer_idx] : offsets[layer_idx + 1]] = 1.0
-        rows.append(row)
+        layer_row = np.zeros(num_vars, dtype=float)
+        layer_row[offsets[layer_idx] : offsets[layer_idx + 1]] = 1.0
+        rows.append(layer_row)
         lower.append(1.0)
         upper.append(1.0)
 
@@ -141,8 +141,8 @@ def _solve_for_batch(
     if constraints.diversity_alpha is not None:
         for previous in constraints.previous_solutions:
             previous_set = set(previous)
-            row = np.array([1.0 if candidate.name in previous_set else 0.0 for candidate in flat])
-            rows.append(row)
+            diversity_row = np.array([1.0 if candidate.name in previous_set else 0.0 for candidate in flat], dtype=float)
+            rows.append(diversity_row)
             lower.append(-np.inf)
             upper.append(float(constraints.diversity_alpha) * len(candidates_by_layer))
 

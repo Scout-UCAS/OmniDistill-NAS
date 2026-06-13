@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import json
 from pathlib import Path
 from typing import Sequence
@@ -8,14 +9,16 @@ from typing import Sequence
 from .artifacts import workflow_expected_outputs
 from .benchmarks import benchmark_plan, load_benchmark_suite, run_benchmark_suite
 from .experiment import build_stage_plan, load_experiment_spec, plan_to_dict, run_experiment
+from .package_assets import packaged_benchmark_suite_path
 from .plugins import list_plugins
 from .reporting import write_workflow_report
 from .result_zoo import write_result_index
 from .schema import (
+    load_config_file,
     raise_if_errors,
     validate_benchmark_suite,
+    validate_config_file,
     validate_experiment_spec,
-    validate_json_file,
     validate_result_manifest,
 )
 
@@ -102,7 +105,7 @@ def init_command(args: argparse.Namespace) -> int:
 
 def validate_command(args: argparse.Namespace) -> int:
     if args.kind == "auto":
-        payload = json.loads(Path(args.path).read_text(encoding="utf-8"))
+        payload = load_config_file(args.path)
         if "benchmarks" in payload:
             errors = validate_benchmark_suite(payload)
             kind = "benchmark"
@@ -113,7 +116,7 @@ def validate_command(args: argparse.Namespace) -> int:
             errors = validate_experiment_spec(payload)
             kind = "experiment"
     else:
-        errors = validate_json_file(args.path, args.kind)
+        errors = validate_config_file(args.path, args.kind)
         kind = args.kind
     raise_if_errors(errors)
     print(json.dumps({"path": args.path, "kind": kind, "valid": True}, indent=2))
@@ -121,17 +124,19 @@ def validate_command(args: argparse.Namespace) -> int:
 
 
 def benchmark_command(args: argparse.Namespace) -> int:
-    if args.print_plan:
-        suite = load_benchmark_suite(args.suite)
-        print(json.dumps(benchmark_plan(suite), indent=2))
-        return 0
-    payload = run_benchmark_suite(
-        args.suite,
-        result_dir=args.result_dir,
-        dry_run=args.dry_run,
-        workdir=args.workdir,
-        allow_commands=args.allow_commands,
-    )
+    suite_context = packaged_benchmark_suite_path() if args.suite is None else nullcontext(args.suite)
+    with suite_context as suite_path:
+        if args.print_plan:
+            suite = load_benchmark_suite(suite_path)
+            print(json.dumps(benchmark_plan(suite), indent=2))
+            return 0
+        payload = run_benchmark_suite(
+            suite_path,
+            result_dir=args.result_dir,
+            dry_run=args.dry_run,
+            workdir=args.workdir,
+            allow_commands=args.allow_commands,
+        )
     print(json.dumps(payload, indent=2, default=str))
     return 0
 
@@ -190,13 +195,13 @@ def build_parser() -> argparse.ArgumentParser:
     add_run_arguments(plan_parser)
     plan_parser.set_defaults(print_plan=True, dry_run=True, func=run_command)
 
-    validate_parser = subparsers.add_parser("validate", help="Validate experiment, benchmark, or result JSON.")
+    validate_parser = subparsers.add_parser("validate", help="Validate experiment, benchmark, or result config files.")
     validate_parser.add_argument("path")
     validate_parser.add_argument("--kind", choices=["auto", "experiment", "benchmark", "result"], default="auto")
     validate_parser.set_defaults(func=validate_command)
 
     benchmark_parser = subparsers.add_parser("benchmark", help="Run or dry-run a benchmark suite.")
-    benchmark_parser.add_argument("--suite", default="benchmarks/suites/toy_smoke.json")
+    benchmark_parser.add_argument("--suite", default=None, help="Benchmark suite JSON. Defaults to the packaged toy smoke suite.")
     benchmark_parser.add_argument("--result-dir", default="benchmark_runs")
     benchmark_parser.add_argument("--workdir", default=None)
     benchmark_parser.add_argument("--dry-run", action="store_true")

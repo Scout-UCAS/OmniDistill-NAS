@@ -96,7 +96,7 @@ def make_context(args: argparse.Namespace):
     cache_dir.mkdir(parents=True, exist_ok=True)
     loaded = load_model_bundle(args, device=device, dtype=dtype, cache_dir=cache_dir)
     examples, prompt_metadata = load_prompts_from_args(args, loaded.model_kind)
-    batches = make_batches(loaded, examples, args.seq_len, device, args)
+    batches = make_batches(loaded, examples, args.seq_len, device, dtype, args)
     return loaded, batches, prompt_metadata, device, dtype, cache_dir
 
 
@@ -474,7 +474,7 @@ def command_score(args: argparse.Namespace) -> None:
             if variant in skipped:
                 continue
             try:
-                score, measured_seconds = score_candidate(
+                candidate_score, measured_seconds = score_candidate(
                     loaded.model,
                     loaded.layers,
                     int(layer_idx),
@@ -502,7 +502,7 @@ def command_score(args: argparse.Namespace) -> None:
                     "layer_idx": int(layer_idx),
                     "name": f"L{layer_idx}:{variant}",
                     "variant": variant,
-                    "score": score,
+                    "score": candidate_score,
                     "metric": parent_targets[0].metric,
                     "target_name": parent_targets[0].name,
                     "param_memory": float(param_memory),
@@ -514,8 +514,8 @@ def command_score(args: argparse.Namespace) -> None:
             )
 
     by_layer: dict[int, list[dict[str, Any]]] = {}
-    for score in scores:
-        by_layer.setdefault(int(score["layer_idx"]), []).append(score)
+    for score_record in scores:
+        by_layer.setdefault(int(score_record["layer_idx"]), []).append(score_record)
     layer_importance = []
     for layer_idx, layer_scores in sorted(by_layer.items()):
         best = min(layer_scores, key=lambda item: item["score"])

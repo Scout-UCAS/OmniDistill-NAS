@@ -26,8 +26,9 @@ def parameter_memory_bytes(module: nn.Module, dtype_bytes: int = 2) -> int:
     quantized = 0
     quantized_module_ids: set[int] = set()
     for submodule in module.modules():
-        if hasattr(submodule, "quantized_memory_bytes") and not list(submodule.children()):
-            quantized += int(submodule.quantized_memory_bytes(dtype_bytes))
+        quantized_memory_bytes = getattr(submodule, "quantized_memory_bytes", None)
+        if callable(quantized_memory_bytes) and not list(submodule.children()):
+            quantized += int(quantized_memory_bytes(dtype_bytes))
             quantized_module_ids.add(id(submodule))
     dense_parameters = sum(
         parameter.numel()
@@ -43,8 +44,9 @@ def kv_cache_memory_bytes(block: nn.Module, seq_len: int, dtype_bytes: int = 2) 
         attention = block.attention
     else:
         attention = block
-    if hasattr(attention, "kv_cache_elements"):
-        return int(attention.kv_cache_elements(seq_len) * dtype_bytes)
+    kv_cache_elements = getattr(attention, "kv_cache_elements", None)
+    if callable(kv_cache_elements):
+        return int(kv_cache_elements(seq_len) * dtype_bytes)
     if not isinstance(attention, CausalSelfAttention):
         return 0
     return 2 * attention.num_kv_heads * attention.head_dim * seq_len * dtype_bytes

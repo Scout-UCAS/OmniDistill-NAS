@@ -1,0 +1,22 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OmniDistill-NAS result manifest",
+  "type": "object",
+  "required": ["schema_version", "id", "backend", "task", "date", "metrics"],
+  "properties": {
+    "schema_version": {"type": "integer", "minimum": 1},
+    "id": {"type": "string"},
+    "title": {"type": "string"},
+    "backend": {"type": "string"},
+    "model": {"type": "string"},
+    "task": {"type": "string"},
+    "date": {"type": "string"},
+    "hardware": {"type": "object"},
+    "config": {"type": "string"},
+    "command": {"type": "string"},
+    "metrics": {"type": "object"},
+    "artifacts": {"type": "object"},
+    "notes": {"type": "string"}
+  },
+  "additionalProperties": true
+}

@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import sys
+from typing import cast
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -10,6 +11,7 @@ if str(ROOT) not in sys.path:
 
 import torch
 
+from distill_nas_core.blocks import SwiGLUFFN, TransformerBlock
 from distill_nas_core.library import train_decoupled_block_library
 from distill_nas_core.mip import SearchCandidate, SearchConstraints, solve_nas_mip
 from distill_nas_core.resources import candidate_runtime_map, kv_cache_memory_bytes, parameter_memory_bytes
@@ -98,9 +100,10 @@ def main() -> None:
     ]
     candidates_by_layer: list[list[SearchCandidate]] = []
     for layer_idx, parent_block in enumerate(parent.blocks):
+        parent_block = cast(TransformerBlock, parent_block)
         hidden_batches = collect_layer_inputs(parent, token_batches, layer_idx, device=device)
         ffn_inputs = collect_ffn_norm_inputs(parent_block, hidden_batches, device=device)
-        channel_order = ffn_channel_contribution_order(parent_block.ffn, ffn_inputs, device=device)
+        channel_order = ffn_channel_contribution_order(cast(SwiGLUFFN, parent_block.ffn), ffn_inputs, device=device)
         layer_candidates: list[SearchCandidate] = []
 
         trained_blocks = train_decoupled_block_library(

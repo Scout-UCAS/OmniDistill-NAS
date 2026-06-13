@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "id": "toy_smoke",
+  "title": "Toy full workflow smoke",
+  "backend": "toy",
+  "model": "TinyCausalLM",
+  "task": "language-model-compression",
+  "date": "2026-06-13",
+  "hardware": {
+    "device": "cpu-or-mps",
+    "notes": "Toy benchmark manifest for validating the public workflow."
+  },
+  "config": "benchmarks/suites/toy_smoke.json",
+  "command": "omnidistill benchmark --suite benchmarks/suites/toy_smoke.json",
+  "metrics": {
+    "perplexity": "reported in workflow output",
+    "parameter_memory_bytes": "reported in profiling output",
+    "throughput_tokens_per_second": "reported in profiling output",
+    "num_pareto_solutions": "reported in multi-objective search output"
+  },
+  "artifacts": {
+    "workflow_report": "outputs/distill_nas_workflow/report.md",
+    "export_manifest": "outputs/distill_nas_workflow/11_export/manifest.json"
+  },
+  "notes": "This manifest records the reproducible toy benchmark entry; generated metrics are written by each run."
+}

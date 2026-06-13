@@ -3,7 +3,7 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 from collections.abc import Callable
-from typing import Iterable
+from typing import Iterable, cast
 
 import torch
 from torch import nn
@@ -416,8 +416,10 @@ def make_block_variant(
     ffn_channel_order: torch.Tensor | None = None,
 ) -> TransformerBlock:
     config = infer_block_config(parent_block)
-    attention = make_attention_variant(parent_block.attention, spec.attention)
-    ffn = make_ffn_variant(parent_block.ffn, spec.ffn, ffn_channel_order)
+    parent_attention = cast(CausalSelfAttention, parent_block.attention)
+    parent_ffn = cast(SwiGLUFFN, parent_block.ffn)
+    attention = make_attention_variant(parent_attention, spec.attention)
+    ffn = make_ffn_variant(parent_ffn, spec.ffn, ffn_channel_order)
     target = TransformerBlock(config.hidden_size, attention, ffn, norm_eps=parent_block.ln_1.eps)
     copy_layer_norms(parent_block, target)
     return target

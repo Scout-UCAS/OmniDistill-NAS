@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,13 @@ from .artifacts import resolve_path
 from .experiment import load_experiment_spec, run_experiment
 from .schema import raise_if_errors, validate_benchmark_suite
 from .tracking import emit_tracking_event
+
+
+def resolve_benchmark_command(command: list[Any]) -> list[str]:
+    resolved = [str(part) for part in command]
+    if resolved and resolved[0] in {"python", "python3"}:
+        resolved[0] = sys.executable
+    return resolved
 
 
 def load_benchmark_suite(path: str | Path) -> dict[str, Any]:
@@ -38,7 +46,7 @@ def benchmark_plan(suite: dict[str, Any], suite_root: str | Path | None = None) 
         if "config" in item:
             record["config"] = str(resolve_path(item["config"], root=root))
         if "command" in item:
-            record["command"] = item["command"]
+            record["command"] = resolve_benchmark_command(item["command"])
         plan.append(record)
     return plan
 
@@ -67,12 +75,18 @@ def run_benchmark_suite(
         if "config" in item:
             config_path = resolve_path(item["config"], root=suite_root)
             spec = load_experiment_spec(config_path)
-            spec.setdefault("output_dir", str(output_root / item["id"] / "workflow"))
+            workflow_dir = output_root / item["id"] / "workflow"
+            configured_output_dir = spec.get("output_dir")
+            spec["output_dir"] = str(workflow_dir)
             record["results"] = run_experiment(spec, dry_run=dry_run, workdir=workdir)
             record["status"] = "dry_run" if dry_run else "completed"
             record["config"] = str(config_path)
+            record["workflow_dir"] = str(workflow_dir)
+            if configured_output_dir is not None:
+                record["configured_output_dir"] = str(configured_output_dir)
         elif "command" in item:
-            record["command"] = item["command"]
+            command = resolve_benchmark_command(item["command"])
+            record["command"] = command
             if dry_run:
                 record["status"] = "dry_run"
             elif not allow_commands:
@@ -81,7 +95,7 @@ def run_benchmark_suite(
             else:
                 env = os.environ.copy()
                 env.update({str(key): str(value) for key, value in item.get("env", {}).items()})
-                subprocess.run(item["command"], cwd=workdir, env=env, check=True)
+                subprocess.run(command, cwd=workdir, env=env, check=True)
                 record["status"] = "completed"
         record["duration_seconds"] = time.time() - started
         results.append(record)
@@ -95,4 +109,3 @@ def run_benchmark_suite(
     }
     (output_root / "benchmark_results.json").write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
     return payload
-

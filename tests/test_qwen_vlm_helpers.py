@@ -21,9 +21,11 @@ from tools.run_qwen3_attention_search import (
     format_dataset_example,
     format_vla_prompt,
     load_dataset_examples,
+    load_multimodal_model_from_candidates,
     load_multimodal_image,
     make_multimodal_batches,
     move_batch_to_device,
+    QwenCandidateLayer,
     dtype_from_name,
     normalize_model_kind,
     resolve_language_config,
@@ -45,6 +47,10 @@ class FakeQwenLayer(nn.Module):
         self.mlp = nn.Linear(8, 8)
         self.input_layernorm = nn.LayerNorm(8)
         self.post_attention_layernorm = nn.LayerNorm(8)
+        self.attention_type = "full_attention"
+
+    def forward(self, hidden_states: torch.Tensor, **_: object):
+        return hidden_states + 1, None
 
 
 class FakeVlmModel(nn.Module):
@@ -85,7 +91,43 @@ class FakeActionOutput:
         self.logits = logits
 
 
+class SdpaFallbackModel:
+    calls: list[str | None] = []
+
+    @classmethod
+    def from_pretrained(cls, _model_id: str, **kwargs):
+        cls.calls.append(kwargs.get("attn_implementation"))
+        if kwargs.get("attn_implementation") != "eager":
+            raise AttributeError("'OpenVLAForActionPrediction' object has no attribute '_supports_sdpa'")
+        return nn.Linear(1, 1)
+
+
 class QwenVlmHelperTest(unittest.TestCase):
+    def test_qwen_candidate_layer_preserves_attention_type(self) -> None:
+        layer = FakeQwenLayer()
+
+        candidate = QwenCandidateLayer(layer, "parent")
+
+        self.assertEqual(candidate.attention_type, "full_attention")
+
+    def test_qwen_candidate_layer_parent_returns_hidden_tensor(self) -> None:
+        layer = FakeQwenLayer()
+        candidate = QwenCandidateLayer(layer, "parent")
+        hidden = torch.zeros(1, 2, 8)
+
+        output = candidate(hidden)
+
+        self.assertIsInstance(output, torch.Tensor)
+        torch.testing.assert_close(output, hidden + 1)
+
+    def test_multimodal_loader_falls_back_to_eager_attention_for_sdpa_gap(self) -> None:
+        SdpaFallbackModel.calls = []
+
+        model = load_multimodal_model_from_candidates([SdpaFallbackModel], "openvla/openvla-7b", torch.float32, Path("."))
+
+        self.assertIsInstance(model, nn.Linear)
+        self.assertEqual(SdpaFallbackModel.calls, [None, "eager"])
+
     def test_auto_model_kind_detects_vlm_names_and_configs(self) -> None:
         self.assertEqual(normalize_model_kind("auto", "Qwen/Qwen3-VL-2B-Instruct"), "vlm")
         config = types.SimpleNamespace(model_type="custom", vision_config=object(), text_config=object())
@@ -132,10 +174,16 @@ class QwenVlmHelperTest(unittest.TestCase):
         self.assertEqual(extract_score_target(student, model_kind="vla").name, "actions")
 
     def test_move_batch_to_device_keeps_non_tensor_values(self) -> None:
-        batch = {"input_ids": torch.tensor([[1]]), "metadata": "keep"}
-        moved = move_batch_to_device(batch, torch.device("cpu"))
+        batch = {
+            "input_ids": torch.tensor([[1]]),
+            "pixel_values": torch.ones(1, 3, 8, 8),
+            "metadata": "keep",
+        }
+        moved = move_batch_to_device(batch, torch.device("cpu"), dtype=torch.bfloat16)
 
         self.assertEqual(moved["input_ids"].device.type, "cpu")
+        self.assertEqual(moved["input_ids"].dtype, torch.int64)
+        self.assertEqual(moved["pixel_values"].dtype, torch.bfloat16)
         self.assertEqual(moved["metadata"], "keep")
 
     def test_dataset_formatters_cover_llm_vlm_and_vla_records(self) -> None:

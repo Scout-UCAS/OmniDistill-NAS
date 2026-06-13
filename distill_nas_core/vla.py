@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 import torch
 
@@ -20,6 +20,23 @@ class RolloutResult:
     steps: int
     success: bool
     info: dict[str, Any]
+
+
+RolloutAdapter = Callable[[dict[str, Any]], VlaEnv]
+ROLLOUT_ADAPTERS: dict[str, RolloutAdapter] = {}
+
+
+def register_rollout_adapter(name: str, adapter: RolloutAdapter) -> None:
+    if not name:
+        raise ValueError("rollout adapter name must be non-empty")
+    ROLLOUT_ADAPTERS[name] = adapter
+
+
+def get_rollout_adapter(name: str) -> RolloutAdapter:
+    try:
+        return ROLLOUT_ADAPTERS[name]
+    except KeyError as exc:
+        raise ValueError(f"unknown rollout adapter: {name}") from exc
 
 
 def extract_action(output: Any) -> torch.Tensor:
@@ -54,3 +71,14 @@ def rollout_policy(
         if done:
             return RolloutResult(total_reward=total_reward, steps=step + 1, success=bool(info.get("success", done)), info=info)
     return RolloutResult(total_reward=total_reward, steps=max_steps, success=bool(info.get("success", False)), info=info)
+
+
+def rollout_with_adapter(
+    adapter: str,
+    policy: torch.nn.Module,
+    config: dict[str, Any] | None = None,
+    max_steps: int = 100,
+    device: torch.device | str = "cpu",
+) -> RolloutResult:
+    env = get_rollout_adapter(adapter)(config or {})
+    return rollout_policy(env, policy, max_steps=max_steps, device=device)

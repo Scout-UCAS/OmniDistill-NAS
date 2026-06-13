@@ -20,7 +20,7 @@ class LinearSubblock(nn.Module):
 
     def __init__(self, hidden_size: int, bias: bool = True) -> None:
         super().__init__()
-        self.linear = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.linear: nn.Linear = nn.Linear(hidden_size, hidden_size, bias=bias)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         return self.linear(x)
@@ -39,6 +39,9 @@ class QuantizedLinear(nn.Module):
         qmax = (2 ** (num_bits - 1)) - 1
         scale = weight.detach().float().abs().amax(dim=1).clamp_min(1e-8) / qmax
         quantized = torch.round(weight.detach().float() / scale[:, None]).clamp(-qmax, qmax).to(torch.int8)
+        self.weight_q: torch.Tensor
+        self.scale: torch.Tensor
+        self.bias: torch.Tensor | None
         self.register_buffer("weight_q", quantized)
         self.register_buffer("scale", scale)
         if bias is None:
@@ -84,10 +87,10 @@ class CausalSelfAttention(nn.Module):
         self.num_kv_heads = num_kv_heads
         self.head_dim = hidden_size // num_heads
 
-        self.q_proj = nn.Linear(hidden_size, hidden_size, bias=bias)
-        self.k_proj = nn.Linear(hidden_size, num_kv_heads * self.head_dim, bias=bias)
-        self.v_proj = nn.Linear(hidden_size, num_kv_heads * self.head_dim, bias=bias)
-        self.o_proj = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.q_proj: nn.Linear = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.k_proj: nn.Linear = nn.Linear(hidden_size, num_kv_heads * self.head_dim, bias=bias)
+        self.v_proj: nn.Linear = nn.Linear(hidden_size, num_kv_heads * self.head_dim, bias=bias)
+        self.o_proj: nn.Linear = nn.Linear(hidden_size, hidden_size, bias=bias)
 
     def _shape_q(self, x: torch.Tensor) -> torch.Tensor:
         batch, seq_len, _ = x.shape
@@ -139,12 +142,12 @@ class FactorizedKVAttention(nn.Module):
         self.latent_dim = latent_dim
         self.latent_size = num_kv_heads * latent_dim
 
-        self.q_proj = nn.Linear(hidden_size, hidden_size, bias=bias)
-        self.k_down_proj = nn.Linear(hidden_size, self.latent_size, bias=False)
-        self.k_up_proj = nn.Linear(self.latent_size, num_kv_heads * self.head_dim, bias=bias)
-        self.v_down_proj = nn.Linear(hidden_size, self.latent_size, bias=False)
-        self.v_up_proj = nn.Linear(self.latent_size, num_kv_heads * self.head_dim, bias=bias)
-        self.o_proj = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.q_proj: nn.Linear = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.k_down_proj: nn.Linear = nn.Linear(hidden_size, self.latent_size, bias=False)
+        self.k_up_proj: nn.Linear = nn.Linear(self.latent_size, num_kv_heads * self.head_dim, bias=bias)
+        self.v_down_proj: nn.Linear = nn.Linear(hidden_size, self.latent_size, bias=False)
+        self.v_up_proj: nn.Linear = nn.Linear(self.latent_size, num_kv_heads * self.head_dim, bias=bias)
+        self.o_proj: nn.Linear = nn.Linear(hidden_size, hidden_size, bias=bias)
 
     def _shape_q(self, x: torch.Tensor) -> torch.Tensor:
         batch, seq_len, _ = x.shape
@@ -198,11 +201,11 @@ class LatentKVAttention(nn.Module):
         self.head_dim = hidden_size // num_heads
         self.latent_dim = latent_dim
 
-        self.q_proj = nn.Linear(hidden_size, hidden_size, bias=bias)
-        self.kv_down_proj = nn.Linear(hidden_size, latent_dim, bias=False)
-        self.k_up_proj = nn.Linear(latent_dim, num_kv_heads * self.head_dim, bias=bias)
-        self.v_up_proj = nn.Linear(latent_dim, num_kv_heads * self.head_dim, bias=bias)
-        self.o_proj = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.q_proj: nn.Linear = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.kv_down_proj: nn.Linear = nn.Linear(hidden_size, latent_dim, bias=False)
+        self.k_up_proj: nn.Linear = nn.Linear(latent_dim, num_kv_heads * self.head_dim, bias=bias)
+        self.v_up_proj: nn.Linear = nn.Linear(latent_dim, num_kv_heads * self.head_dim, bias=bias)
+        self.o_proj: nn.Linear = nn.Linear(hidden_size, hidden_size, bias=bias)
 
     def _shape_q(self, x: torch.Tensor) -> torch.Tensor:
         batch, seq_len, _ = x.shape
@@ -254,11 +257,11 @@ class MultiKeyAttention(nn.Module):
         self.head_dim = hidden_size // num_heads
         self.value_rank = value_rank
 
-        self.q_proj = nn.Linear(hidden_size, hidden_size, bias=bias)
-        self.k_proj = nn.Linear(hidden_size, self.head_dim, bias=bias)
-        self.v_down_proj = nn.Linear(hidden_size, value_rank, bias=False)
-        self.v_up_proj = nn.Linear(value_rank, hidden_size, bias=bias)
-        self.o_proj = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.q_proj: nn.Linear = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.k_proj: nn.Linear = nn.Linear(hidden_size, self.head_dim, bias=bias)
+        self.v_down_proj: nn.Linear = nn.Linear(hidden_size, value_rank, bias=False)
+        self.v_up_proj: nn.Linear = nn.Linear(value_rank, hidden_size, bias=bias)
+        self.o_proj: nn.Linear = nn.Linear(hidden_size, hidden_size, bias=bias)
 
     def _shape_q(self, x: torch.Tensor) -> torch.Tensor:
         batch, seq_len, _ = x.shape
@@ -299,10 +302,10 @@ class QuantizedMHAAttention(nn.Module):
         self.num_heads = num_heads
         self.num_kv_heads = num_heads
         self.head_dim = hidden_size // num_heads
-        self.q_proj = q_proj
-        self.k_proj = k_proj
-        self.v_proj = v_proj
-        self.o_proj = o_proj
+        self.q_proj: QuantizedLinear = q_proj
+        self.k_proj: QuantizedLinear = k_proj
+        self.v_proj: QuantizedLinear = v_proj
+        self.o_proj: QuantizedLinear = o_proj
 
     def _shape(self, x: torch.Tensor) -> torch.Tensor:
         batch, seq_len, _ = x.shape
@@ -344,10 +347,11 @@ class KernelLinearAttention(nn.Module):
         self.output_gate = output_gate
         self.eps = eps
 
-        self.q_proj = nn.Linear(hidden_size, hidden_size, bias=bias)
-        self.k_proj = nn.Linear(hidden_size, hidden_size, bias=bias)
-        self.v_proj = nn.Linear(hidden_size, hidden_size, bias=bias)
-        self.o_proj = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.q_proj: nn.Linear = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.k_proj: nn.Linear = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.v_proj: nn.Linear = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.o_proj: nn.Linear = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.g_proj: nn.Linear | None = None
         if output_gate:
             self.g_proj = nn.Linear(hidden_size, hidden_size, bias=bias)
 
@@ -383,6 +387,7 @@ class KernelLinearAttention(nn.Module):
         output = output.transpose(1, 2).contiguous().view(batch, seq_len, self.hidden_size)
         output = self.o_proj(output)
         if self.output_gate:
+            assert self.g_proj is not None
             output = output * torch.sigmoid(self.g_proj(x))
         return output
 
@@ -398,11 +403,12 @@ class MultiScaleRetentionAttention(nn.Module):
         self.num_heads = num_heads
         self.num_kv_heads = num_heads
         self.head_dim = hidden_size // num_heads
-        self.q_proj = nn.Linear(hidden_size, hidden_size, bias=bias)
-        self.k_proj = nn.Linear(hidden_size, hidden_size, bias=bias)
-        self.v_proj = nn.Linear(hidden_size, hidden_size, bias=bias)
-        self.o_proj = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.q_proj: nn.Linear = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.k_proj: nn.Linear = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.v_proj: nn.Linear = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.o_proj: nn.Linear = nn.Linear(hidden_size, hidden_size, bias=bias)
         decays = torch.linspace(0.85, 0.99, num_heads).log().view(1, num_heads, 1, 1)
+        self.log_decay: torch.Tensor
         self.register_buffer("log_decay", decays, persistent=False)
 
     def _shape(self, x: torch.Tensor) -> torch.Tensor:
@@ -442,10 +448,10 @@ class LocalSparseAttention(nn.Module):
         self.num_kv_heads = num_heads
         self.head_dim = hidden_size // num_heads
         self.window_size = window_size
-        self.q_proj = nn.Linear(hidden_size, hidden_size, bias=bias)
-        self.k_proj = nn.Linear(hidden_size, hidden_size, bias=bias)
-        self.v_proj = nn.Linear(hidden_size, hidden_size, bias=bias)
-        self.o_proj = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.q_proj: nn.Linear = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.k_proj: nn.Linear = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.v_proj: nn.Linear = nn.Linear(hidden_size, hidden_size, bias=bias)
+        self.o_proj: nn.Linear = nn.Linear(hidden_size, hidden_size, bias=bias)
 
     def _shape(self, x: torch.Tensor) -> torch.Tensor:
         batch, seq_len, _ = x.shape
@@ -478,9 +484,9 @@ class SwiGLUFFN(nn.Module):
         super().__init__()
         self.hidden_size = hidden_size
         self.intermediate_size = intermediate_size
-        self.gate_proj = nn.Linear(hidden_size, intermediate_size, bias=bias)
-        self.up_proj = nn.Linear(hidden_size, intermediate_size, bias=bias)
-        self.down_proj = nn.Linear(intermediate_size, hidden_size, bias=bias)
+        self.gate_proj: nn.Linear = nn.Linear(hidden_size, intermediate_size, bias=bias)
+        self.up_proj: nn.Linear = nn.Linear(hidden_size, intermediate_size, bias=bias)
+        self.down_proj: nn.Linear = nn.Linear(intermediate_size, hidden_size, bias=bias)
 
     def intermediate(self, x: torch.Tensor) -> torch.Tensor:
         return F.silu(self.gate_proj(x)) * self.up_proj(x)
@@ -501,10 +507,10 @@ class TransformerBlock(nn.Module):
     ) -> None:
         super().__init__()
         self.hidden_size = hidden_size
-        self.ln_1 = nn.LayerNorm(hidden_size, eps=norm_eps)
-        self.attention = attention
-        self.ln_2 = nn.LayerNorm(hidden_size, eps=norm_eps)
-        self.ffn = ffn
+        self.ln_1: nn.LayerNorm = nn.LayerNorm(hidden_size, eps=norm_eps)
+        self.attention: nn.Module = attention
+        self.ln_2: nn.LayerNorm = nn.LayerNorm(hidden_size, eps=norm_eps)
+        self.ffn: nn.Module = ffn
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = x + self.attention(self.ln_1(x))
@@ -733,10 +739,12 @@ def copy_full_attention_weights(source: CausalSelfAttention, target: nn.Module) 
     """Copy parent Q/O and expanded K/V weights into full-head attention-like modules."""
 
     with torch.no_grad():
-        if hasattr(target, "q_proj"):
-            target.q_proj.load_state_dict(source.q_proj.state_dict())
-        if hasattr(target, "o_proj"):
-            target.o_proj.load_state_dict(source.o_proj.state_dict())
+        q_projection = getattr(target, "q_proj", None)
+        if isinstance(q_projection, nn.Linear):
+            q_projection.load_state_dict(source.q_proj.state_dict())
+        o_projection = getattr(target, "o_proj", None)
+        if isinstance(o_projection, nn.Linear):
+            o_projection.load_state_dict(source.o_proj.state_dict())
         for source_projection, target_projection in [
             (source.k_proj, getattr(target, "k_proj", None)),
             (source.v_proj, getattr(target, "v_proj", None)),
@@ -961,6 +969,7 @@ def kernel_linear_from_attention(
     ).to(device=device, dtype=dtype)
     copy_full_attention_weights(attention, target)
     if output_gate:
+        assert target.g_proj is not None
         with torch.no_grad():
             target.g_proj.weight.zero_()
             if target.g_proj.bias is not None:

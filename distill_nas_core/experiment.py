@@ -42,7 +42,7 @@ def load_experiment_spec(path: str | Path) -> dict[str, Any]:
     text = resolved.read_text(encoding="utf-8")
     if resolved.suffix.lower() in {".yaml", ".yml"}:
         try:
-            import yaml
+            import yaml  # type: ignore[import-untyped]
         except ImportError as exc:  # pragma: no cover - depends on environment
             raise RuntimeError("YAML experiment specs require PyYAML") from exc
         payload = yaml.safe_load(text)

@@ -5,7 +5,7 @@ import json
 import sys
 from dataclasses import asdict
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import torch
 
@@ -13,6 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from distill_nas_core.blocks import SwiGLUFFN, TransformerBlock
 from distill_nas_core.distill import global_knowledge_distillation
 from distill_nas_core.library import train_decoupled_block_library
 from distill_nas_core.mip import SearchCandidate, SearchConstraints, solve_nas_mip
@@ -175,9 +176,10 @@ def command_bld(args: argparse.Namespace) -> None:
 
     records: list[dict[str, Any]] = []
     for layer_idx, parent_block in enumerate(parent.blocks):
+        parent_block = cast(TransformerBlock, parent_block)
         hidden_batches = collect_layer_inputs(parent, token_batches, layer_idx, device=device)
         ffn_inputs = collect_ffn_norm_inputs(parent_block, hidden_batches, device=device)
-        channel_order = ffn_channel_contribution_order(parent_block.ffn, ffn_inputs, device=device)
+        channel_order = ffn_channel_contribution_order(cast(SwiGLUFFN, parent_block.ffn), ffn_inputs, device=device)
         trained_blocks = train_decoupled_block_library(
             layer_idx,
             parent_block,

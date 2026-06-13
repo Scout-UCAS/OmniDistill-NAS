@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from collections.abc import Iterable
+from typing import Any, cast
 
 import torch
 from torch import nn
@@ -12,12 +13,13 @@ from .distill import batch_input_ids, forward_batch, logits_kl_loss, move_batch_
 
 @contextmanager
 def replace_block(model: nn.Module, layer_idx: int, block: nn.Module):
-    original = model.blocks[layer_idx]
-    model.blocks[layer_idx] = block
+    blocks = cast(Any, model).blocks
+    original = blocks[layer_idx]
+    blocks[layer_idx] = block
     try:
         yield
     finally:
-        model.blocks[layer_idx] = original
+        blocks[layer_idx] = original
 
 
 def causal_lm_loss(logits: torch.Tensor, input_ids: torch.Tensor) -> torch.Tensor:
@@ -44,7 +46,8 @@ def score_replace_one_block(
     parent_model = parent_model.to(device).eval()
     candidate_block = candidate_block.to(device).eval()
     values: list[float] = []
-    original_block = parent_model.blocks[layer_idx]
+    blocks = cast(Any, parent_model).blocks
+    original_block = blocks[layer_idx]
 
     with torch.no_grad():
         try:
@@ -54,10 +57,10 @@ def score_replace_one_block(
                 batch = move_batch_to_device(batch, device)
                 input_ids = batch_input_ids(batch)
 
-                parent_model.blocks[layer_idx] = original_block
+                blocks[layer_idx] = original_block
                 parent_out = forward_batch(parent_model, batch) if metric == "kl" else None
 
-                parent_model.blocks[layer_idx] = candidate_block
+                blocks[layer_idx] = candidate_block
                 candidate_out = forward_batch(parent_model, batch)
 
                 if metric == "lm_loss":
@@ -69,7 +72,7 @@ def score_replace_one_block(
                     score = logits_kl_loss(parent_out.logits, candidate_out.logits)
                 values.append(float(score.detach().cpu()))
         finally:
-            parent_model.blocks[layer_idx] = original_block
+            blocks[layer_idx] = original_block
 
     if not values:
         raise ValueError("token_batches produced no batches")
