@@ -1,6 +1,6 @@
 # OmniDistill-NAS
 
-[![CI](https://github.com/EDGSCOUT/OmniDistill-NAS/actions/workflows/ci.yml/badge.svg)](https://github.com/EDGSCOUT/OmniDistill-NAS/actions/workflows/ci.yml)
+[![CI](https://github.com/Scout-UCAS/OmniDistill-NAS/actions/workflows/ci.yml/badge.svg)](https://github.com/Scout-UCAS/OmniDistill-NAS/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://www.python.org/)
 [![PyTorch](https://img.shields.io/badge/PyTorch-supported-ee4c2c.svg)](https://pytorch.org/)
 
@@ -44,21 +44,21 @@ place to run that loop end to end.
 For local development:
 
 ```bash
-git clone git@github.com:EDGSCOUT/OmniDistill-NAS.git
+git clone git@github.com:Scout-UCAS/OmniDistill-NAS.git
 cd OmniDistill-NAS
 python3 -m pip install -e ".[dev]"
 ```
 
-The workflow scripts can also prepare project-local optional dependencies under
-`vendor/python`:
+The workflow scripts can also prepare workspace-local optional dependencies
+under `vendor/python`:
 
 ```bash
 bash scripts/01_prepare_environment.sh
 ```
 
 Generated artifacts are written under `outputs/`, model checkpoints under
-`checkpoints/`, and Hugging Face caches under `hf_cache/`. These directories
-are ignored by Git.
+`checkpoints/`, and Hugging Face caches under `hf_cache/` in the active
+workspace. These directories are ignored by Git.
 
 ## Quick Start
 
@@ -77,16 +77,19 @@ bash scripts/run_all.sh
 Inspect generated artifacts:
 
 ```bash
-python3 tools/workflow_status.py --workflow-dir outputs/distill_nas_workflow
+omnidistill status --workflow-dir outputs/distill_nas_workflow
 sed -n '1,120p' outputs/distill_nas_workflow/report.md
 ```
 
 Use the config-driven runner with resume/cache behavior:
 
 ```bash
-python3 tools/run_experiment.py --config configs/toy_experiment.json
-python3 tools/run_experiment.py --config configs/toy_experiment.json --from-stage evaluate
+omnidistill run --config configs/toy_experiment.json
+omnidistill run --config configs/toy_experiment.json --from-stage evaluate
 ```
+
+Use `--workdir /path/to/workspace` to keep outputs, checkpoints, caches, and
+vendored optional dependencies outside the source tree.
 
 ## Workflow
 

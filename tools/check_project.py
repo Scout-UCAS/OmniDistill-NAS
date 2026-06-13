@@ -20,6 +20,7 @@ def main() -> None:
     args = build_parser().parse_args()
     run([sys.executable, "-m", "compileall", "distill_nas_core", "scripts", "tools", "tests"])
     run([sys.executable, "-m", "pytest", "-q"])
+    run([sys.executable, "-m", "distill_nas_core.cli", "--help"])
     for script in [
         "tools/run_qwen3_attention_search.py",
         "tools/run_staged_model_pipeline.py",

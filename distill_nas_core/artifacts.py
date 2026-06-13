@@ -21,10 +21,10 @@ STAGE_REQUIRED_KEYS: dict[str, tuple[str, ...]] = {
 }
 
 
-def resolve_path(path: str | Path, root: str | Path = PROJECT_ROOT) -> Path:
+def resolve_path(path: str | Path, root: str | Path | None = None) -> Path:
     resolved = Path(path)
     if not resolved.is_absolute():
-        resolved = Path(root) / resolved
+        resolved = (Path.cwd() if root is None else Path(root)) / resolved
     return resolved
 
 
@@ -101,8 +101,8 @@ def assert_valid_artifact(payload: dict[str, Any], expected_stage: str | None = 
         raise ValueError("; ".join(errors))
 
 
-def workflow_expected_outputs(output_dir: str | Path) -> dict[str, list[Path]]:
-    root = resolve_path(output_dir)
+def workflow_expected_outputs(output_dir: str | Path, root: str | Path | None = None) -> dict[str, list[Path]]:
+    root = resolve_path(output_dir, root=root)
     return {
         "bld": [root / "04_bld_block_library" / "block_library.pth"],
         "score": [root / "05_nas_layer_scoring" / "layer_importance.json"],

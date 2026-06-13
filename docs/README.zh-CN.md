@@ -96,9 +96,9 @@ bash scripts/run_all.sh
 阶段产物：
 
 ```bash
-python3 tools/run_experiment.py --config configs/toy_experiment.json
-python3 tools/run_experiment.py --config configs/toy_experiment.json --from-stage evaluate
-python3 tools/workflow_status.py --workflow-dir outputs/distill_nas_workflow
+omnidistill run --config configs/toy_experiment.json
+omnidistill run --config configs/toy_experiment.json --from-stage evaluate
+omnidistill status --workflow-dir outputs/distill_nas_workflow
 ```
 
 默认 toy 配置在 04-08 论文阶段后增加：
@@ -329,14 +329,14 @@ fla_native_sparse_attn
 fla_moba_attn
 ```
 
-其中 MHA/量化 MHA/MQA/GQA/MFA/MLA/MKA/linear/no-op 候选均已在 Qwen decoder layer 中真实 forward，并尽量复用原 Qwen attention 的 q/k/v/o、q/k norm 和 RoPE。FLA 候选也会替换原始 self-attention，并尽量用原 Qwen attention 的 q/k/v/o 权重初始化。`scripts/01_prepare_environment.sh` 在 Linux GPU 环境下会默认把 `fla-org/flash-linear-attention` clone 到 `vendor/flash-linear-attention`；如需跳过可设置 `INSTALL_FLA=0`，如需校验时强制要求 FLA 可设置 `REQUIRE_FLA=1`。当前环境缺少某个 FLA 类或 CUDA 依赖时默认跳过该候选；如需严格失败，可加 `--no-skip-unavailable-fla`。结果默认写入：
+其中 MHA/量化 MHA/MQA/GQA/MFA/MLA/MKA/linear/no-op 候选均已在 Qwen decoder layer 中真实 forward，并尽量复用原 Qwen attention 的 q/k/v/o、q/k norm 和 RoPE。FLA 候选也会替换原始 self-attention，并尽量用原 Qwen attention 的 q/k/v/o 权重初始化。`scripts/01_prepare_environment.sh` 在 Linux GPU 环境下会默认把 `fla-org/flash-linear-attention` clone 到当前工作区的 `vendor/flash-linear-attention`；如需跳过可设置 `INSTALL_FLA=0`，如需校验时强制要求 FLA 可设置 `REQUIRE_FLA=1`。当前环境缺少某个 FLA 类或 CUDA 依赖时默认跳过该候选；如需严格失败，可加 `--no-skip-unavailable-fla`。结果默认写入：
 
 ```text
 outputs/qwen3_0_6b_layer_skip_search.json
 checkpoints/qwen3_0_6b_layer_skip_search.pth
 ```
 
-模型权重缓存默认位于项目目录下的 `hf_cache/models`。本地安装的 `transformers` 等依赖可放在 `vendor/python`，脚本会优先从该目录导入。
+模型权重缓存默认位于当前工作区的 `hf_cache/models`。本地安装的 `transformers` 等依赖可放在 `vendor/python`，脚本会优先从该目录导入。
 
 如需显式指定候选集合：
 

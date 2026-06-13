@@ -9,6 +9,7 @@ from distill_nas_core.multi_objective import (
     enumerate_feasible_solutions,
     generate_weight_grid,
     pareto_front,
+    pareto_svg,
     parse_weight_grid,
     run_weight_sweep,
     solution_to_config,
@@ -78,6 +79,15 @@ class MultiObjectiveSearchTest(unittest.TestCase):
             )
             self.assertTrue(report.exists())
             self.assertTrue(plot.exists())
+
+    def test_pareto_svg_labels_score_direction(self) -> None:
+        candidates = [[candidate(0, "only", 1.0, 1, 1)]]
+        constraints = SearchConstraints(seq_len=16, batch_sizes=[1], score_direction="maximize")
+        solution = enumerate_feasible_solutions(candidates, constraints)[0]
+
+        svg = pareto_svg([solution], [solution], score_direction="maximize")
+
+        self.assertIn("score, higher is better", svg)
 
     def test_multi_objective_constraints_are_batch_specific(self) -> None:
         candidates = [

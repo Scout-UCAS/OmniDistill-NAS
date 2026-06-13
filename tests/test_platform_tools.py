@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import tempfile
 import unittest
@@ -7,6 +9,7 @@ from pathlib import Path
 
 import torch
 
+from distill_nas_core.cli import main as cli_main
 from distill_nas_core.data_adapters import load_examples
 from distill_nas_core.evaluation import evaluate_artifact
 from distill_nas_core.experiment import build_stage_plan, run_experiment
@@ -71,6 +74,20 @@ class PlatformToolsTest(unittest.TestCase):
             results = run_experiment(spec, dry_run=True)
             self.assertEqual([item["status"] for item in results], ["dry_run", "dry_run"])
 
+    def test_experiment_relative_outputs_use_workdir(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            spec = {"backend": "toy", "output_dir": "workflow", "stages": ["bld"]}
+            plan = build_stage_plan(spec, workdir=workspace)
+
+            self.assertEqual(plan[0].env["WORKFLOW_WORKDIR"], str(workspace))
+            self.assertEqual(plan[0].env["WORKFLOW_OUTPUT_DIR"], str(workspace / "workflow"))
+            self.assertEqual(plan[0].outputs[0], workspace / "workflow" / "04_bld_block_library" / "block_library.pth")
+            self.assertTrue(Path(plan[0].command[1]).is_absolute())
+
+            results = run_experiment(spec, dry_run=True, workdir=workspace)
+            self.assertEqual(results[0]["outputs"][0], str(workspace / "workflow" / "04_bld_block_library" / "block_library.pth"))
+
     def test_data_adapter_json(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "examples.json"
@@ -78,6 +95,44 @@ class PlatformToolsTest(unittest.TestCase):
             examples = load_examples("json", {"path": str(path)})
         self.assertEqual(examples[0].prompt, "Hello?")
         self.assertEqual(examples[0].target, "World")
+
+    def test_data_adapter_preserves_falsey_values(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "examples.json"
+            path.write_text(
+                json.dumps([{"text": "Classify this", "label": 0, "action": False, "state": []}]),
+                encoding="utf-8",
+            )
+            examples = load_examples("json", {"path": str(path)})
+
+        self.assertEqual(examples[0].target, 0)
+        self.assertIs(examples[0].action, False)
+        self.assertEqual(examples[0].state, [])
+
+    def test_cli_run_dry_run_from_config(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workspace = Path(tmp)
+            config = workspace / "experiment.json"
+            config.write_text(
+                json.dumps({"backend": "toy", "output_dir": "workflow", "stages": ["bld"]}),
+                encoding="utf-8",
+            )
+            stdout = io.StringIO()
+            with contextlib.redirect_stdout(stdout):
+                exit_code = cli_main(["run", "--config", str(config), "--workdir", str(workspace), "--dry-run"])
+
+        self.assertEqual(exit_code, 0)
+        payload = json.loads(stdout.getvalue())
+        self.assertEqual(payload[0]["status"], "dry_run")
+        self.assertIn(str(workspace / "workflow"), payload[0]["outputs"][0])
+
+    def test_pyproject_declares_console_entrypoints_and_license(self) -> None:
+        pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
+        text = pyproject.read_text(encoding="utf-8")
+
+        self.assertIn('license = {file = "LICENSE"}', text)
+        self.assertIn('omnidistill = "distill_nas_core.cli:main"', text)
+        self.assertIn('readme = "README.md"', text)
 
     def test_attention_variant_plugin_registration(self) -> None:
         def spec_factory(name: str, _parent_num_heads: int) -> AttentionSpec:

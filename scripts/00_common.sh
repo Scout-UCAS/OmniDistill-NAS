@@ -3,6 +3,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+WORKFLOW_WORKDIR="${WORKFLOW_WORKDIR:-${PWD}}"
+mkdir -p "${WORKFLOW_WORKDIR}"
+WORKFLOW_WORKDIR="$(cd "${WORKFLOW_WORKDIR}" && pwd)"
+DISTILL_NAS_VENDOR_DIR="${DISTILL_NAS_VENDOR_DIR:-${WORKFLOW_WORKDIR}/vendor}"
+DISTILL_NAS_VENDOR_PYTHON="${DISTILL_NAS_VENDOR_PYTHON:-${DISTILL_NAS_VENDOR_DIR}/python}"
 cd "${PROJECT_ROOT}"
 
 if [[ -z "${PYTHON:-}" ]]; then
@@ -16,20 +21,24 @@ if [[ -z "${PYTHON:-}" ]]; then
 fi
 
 export PYTHONDONTWRITEBYTECODE="${PYTHONDONTWRITEBYTECODE:-1}"
-export HF_HOME="${HF_HOME:-${PROJECT_ROOT}/hf_cache}"
+export WORKFLOW_WORKDIR
+export DISTILL_NAS_VENDOR_DIR
+export DISTILL_NAS_VENDOR_PYTHON
+export WORKFLOW_OUTPUT_DIR="${WORKFLOW_OUTPUT_DIR:-${STAGE_DIR:-${WORKFLOW_WORKDIR}/outputs/distill_nas_workflow}}"
+export HF_HOME="${HF_HOME:-${WORKFLOW_WORKDIR}/hf_cache}"
 export HF_HUB_CACHE="${HF_HUB_CACHE:-${HF_HOME}/hub}"
 export HUGGINGFACE_HUB_CACHE="${HUGGINGFACE_HUB_CACHE:-${HF_HOME}/hub}"
 export TRANSFORMERS_CACHE="${TRANSFORMERS_CACHE:-${HF_HOME}/transformers}"
 export HF_XET_CACHE="${HF_XET_CACHE:-${HF_HOME}/xet}"
-export XDG_CACHE_HOME="${XDG_CACHE_HOME:-${PROJECT_ROOT}/.cache}"
+export XDG_CACHE_HOME="${XDG_CACHE_HOME:-${WORKFLOW_WORKDIR}/.cache}"
 export HF_ENDPOINT="${HF_ENDPOINT:-https://hf-mirror.com}"
 export HF_HUB_DISABLE_XET="${HF_HUB_DISABLE_XET:-1}"
 DISTILL_NAS_USE_VENDOR_PYTHON="${DISTILL_NAS_USE_VENDOR_PYTHON:-${PUZZLE_USE_VENDOR_PYTHON:-auto}}"
 DISTILL_NAS_VENDOR_NEEDED=0
-if [[ "${DISTILL_NAS_USE_VENDOR_PYTHON}" == "auto" ]] && [[ -d "${PROJECT_ROOT}/vendor/python" ]]; then
+if [[ "${DISTILL_NAS_USE_VENDOR_PYTHON}" == "auto" ]] && [[ -d "${DISTILL_NAS_VENDOR_PYTHON}" ]]; then
   if [[ "$(uname -s)" == "Linux" ]]; then
     DISTILL_NAS_VENDOR_NEEDED=1
-  elif "${PYTHON}" - "${PROJECT_ROOT}/vendor/python" <<'PY'
+  elif "${PYTHON}" - "${DISTILL_NAS_VENDOR_PYTHON}" <<'PY'
 import importlib.util
 import sys
 
@@ -57,12 +66,12 @@ if [[ "${DISTILL_NAS_USE_VENDOR_PYTHON}" =~ ^(1|true|yes|on)$ ]] || {
     [[ "$(uname -s)" == "Linux" ]] || [[ "${DISTILL_NAS_VENDOR_NEEDED}" == "1" ]]
   }
 }; then
-  export PYTHONPATH="${PROJECT_ROOT}/vendor/python:${PROJECT_ROOT}:${PYTHONPATH:-}"
+  export PYTHONPATH="${DISTILL_NAS_VENDOR_PYTHON}:${PROJECT_ROOT}:${PYTHONPATH:-}"
 else
   export PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}"
 fi
 
-mkdir -p vendor/python hf_cache/models hf_cache/datasets outputs checkpoints
+mkdir -p "${DISTILL_NAS_VENDOR_PYTHON}" "${HF_HOME}/models" "${HF_HOME}/datasets" "${WORKFLOW_WORKDIR}/outputs" "${WORKFLOW_WORKDIR}/checkpoints"
 
 print_step() {
   printf '\n==> %s\n' "$1"

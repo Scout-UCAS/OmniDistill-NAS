@@ -61,9 +61,9 @@ The shell workflow remains available, but experiments can also be described in
 a JSON/YAML spec and run with resume semantics:
 
 ```bash
-python3 tools/run_experiment.py --config configs/toy_experiment.json
-python3 tools/run_experiment.py --config configs/toy_experiment.json --from-stage evaluate
-python3 tools/workflow_status.py --workflow-dir outputs/distill_nas_workflow
+omnidistill run --config configs/toy_experiment.json
+omnidistill run --config configs/toy_experiment.json --from-stage evaluate
+omnidistill status --workflow-dir outputs/distill_nas_workflow
 ```
 
 `run_experiment.py` skips completed artifact-producing stages unless
@@ -248,12 +248,13 @@ expands to `parent_attn`, `mha_attn`, `quant_mha_attn`, `mqa_attn`, `gqa_kv2`,
 `fla_rebased_linear_attn`, `fla_deltanet_attn`, `fla_gated_deltanet_attn`,
 `fla_kimi_delta_attn`, `fla_multiscale_retention_attn`, `fla_mla_attn`,
 `fla_native_sparse_attn`, and `fla_moba_attn`. `scripts/01_prepare_environment.sh`
-clones `fla-org/flash-linear-attention` under `vendor/flash-linear-attention`
-by default on Linux GPU hosts; set `INSTALL_FLA=0` to skip this, or
+clones `fla-org/flash-linear-attention` under the workspace-local
+`vendor/flash-linear-attention` by default on Linux GPU hosts; set
+`INSTALL_FLA=0` to skip this, or
 `REQUIRE_FLA=1` during validation to fail if `fla.layers` is unavailable.
 Missing FLA classes or CUDA deps are skipped by default during search; pass
 `--no-skip-unavailable-fla` to fail instead.
-Results are written under the project directory to
+Results are written under the active workspace to
 `outputs/qwen3_0_6b_layer_skip_search.json` and `checkpoints/qwen3_0_6b_layer_skip_search.pth`.
 Model weights are cached under `hf_cache/models`, and a local `transformers`
 install can live in `vendor/python`.

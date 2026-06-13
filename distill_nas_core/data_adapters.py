@@ -19,6 +19,7 @@ class TaskExample:
 
 DatasetLoader = Callable[[dict[str, Any]], list[TaskExample]]
 DATASET_ADAPTERS: dict[str, DatasetLoader] = {}
+_MISSING = object()
 
 
 def register_dataset_adapter(name: str, loader: DatasetLoader) -> None:
@@ -38,17 +39,25 @@ def load_examples(adapter: str, config: dict[str, Any]) -> list[TaskExample]:
     return get_dataset_adapter(adapter)(config)
 
 
+def _first_present(raw: dict[str, Any], keys: tuple[str, ...]) -> Any | None:
+    for key in keys:
+        value = raw.get(key, _MISSING)
+        if value is not _MISSING and value is not None:
+            return value
+    return None
+
+
 def _example_from_mapping(raw: dict[str, Any]) -> TaskExample:
-    prompt = raw.get("prompt") or raw.get("question") or raw.get("text") or raw.get("instruction")
+    prompt = _first_present(raw, ("prompt", "question", "text", "instruction"))
     if prompt is None:
         raise ValueError("dataset row is missing a prompt/question/text/instruction field")
     metadata = {key: value for key, value in raw.items() if key not in {"prompt", "question", "text", "instruction"}}
     return TaskExample(
         prompt=str(prompt),
-        target=raw.get("target") or raw.get("answer") or raw.get("label"),
-        image=raw.get("image") or raw.get("image_path"),
-        action=raw.get("action") or raw.get("actions"),
-        state=raw.get("state") or raw.get("proprio"),
+        target=_first_present(raw, ("target", "answer", "label")),
+        image=_first_present(raw, ("image", "image_path")),
+        action=_first_present(raw, ("action", "actions")),
+        state=_first_present(raw, ("state", "proprio")),
         metadata=metadata,
     )
 

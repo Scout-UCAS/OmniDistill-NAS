@@ -8,7 +8,7 @@ the paper pipeline stages rather than by a specific dataset.
 | Script | Purpose | Main Output |
 | --- | --- | --- |
 | `00_common.sh` | Shared environment, cache paths, and helper functions. | Helper only |
-| `01_prepare_environment.sh` | Create local directories and install missing optional packages into `vendor/python`. | Environment check |
+| `01_prepare_environment.sh` | Create workspace-local directories and install missing optional packages into `vendor/python`. | Environment check |
 | `02_validate_project.sh` | Compile source files, run unit tests, and check CLIs. | Validation log |
 | `03_smoke_tiny_nas.sh` | Quick end-to-end smoke run for the tiny NAS pipeline. | `outputs/tiny_nas_quick.log` |
 | `04_bld_block_library.sh` | Run BLD and save the trained block library. | `outputs/distill_nas_workflow/04_bld_block_library/` |
@@ -82,7 +82,7 @@ outputs/distill_nas_workflow/
   report.md
 ```
 
-Use `WORKFLOW_OUTPUT_DIR=outputs/<name>` to move the whole workflow tree.
+Use `WORKFLOW_OUTPUT_DIR=outputs/<name>` or `omnidistill run --workdir <dir>` to move the workflow tree.
 `STAGE_DIR=...` remains accepted as a backward-compatible alias.
 
 ## Config-Driven Runs
@@ -91,10 +91,10 @@ Use `WORKFLOW_OUTPUT_DIR=outputs/<name>` to move the whole workflow tree.
 evaluation, profiling, export, and report generation:
 
 ```bash
-python3 tools/run_experiment.py --config configs/toy_experiment.json
-python3 tools/run_experiment.py --config configs/toy_experiment.json --dry-run
-python3 tools/run_experiment.py --config configs/toy_experiment.json --from-stage evaluate
-python3 tools/workflow_status.py --workflow-dir outputs/distill_nas_workflow
+omnidistill run --config configs/toy_experiment.json
+omnidistill run --config configs/toy_experiment.json --dry-run
+omnidistill run --config configs/toy_experiment.json --from-stage evaluate
+omnidistill status --workflow-dir outputs/distill_nas_workflow
 ```
 
 Artifact-producing stages are skipped when their outputs already exist unless

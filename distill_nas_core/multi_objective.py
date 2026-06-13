@@ -247,7 +247,15 @@ def _metric_range(values: Sequence[float]) -> tuple[float, float]:
     return low, high
 
 
-def pareto_svg(solutions: Sequence[NasSolution], pareto_solutions: Sequence[NasSolution], width: int = 720, height: int = 460) -> str:
+def pareto_svg(
+    solutions: Sequence[NasSolution],
+    pareto_solutions: Sequence[NasSolution],
+    score_direction: str = "minimize",
+    width: int = 720,
+    height: int = 460,
+) -> str:
+    if score_direction not in {"minimize", "maximize"}:
+        raise ValueError("score_direction must be 'minimize' or 'maximize'")
     margin = 58
     plot_width = width - margin * 2
     plot_height = height - margin * 2
@@ -256,6 +264,7 @@ def pareto_svg(solutions: Sequence[NasSolution], pareto_solutions: Sequence[NasS
     memory_min, memory_max = _metric_range(memory_values)
     score_min, score_max = _metric_range(score_values)
     pareto_keys = {solution_signature(solution) for solution in pareto_solutions}
+    score_label = "score, higher is better" if score_direction == "maximize" else "score, lower is better"
 
     def x_pos(memory: float) -> float:
         return margin + ((memory - memory_min) / (memory_max - memory_min)) * plot_width
@@ -283,7 +292,7 @@ def pareto_svg(solutions: Sequence[NasSolution], pareto_solutions: Sequence[NasS
             f'<line x1="{margin}" y1="{height - margin}" x2="{width - margin}" y2="{height - margin}" stroke="#344054"/>',
             f'<line x1="{margin}" y1="{margin}" x2="{margin}" y2="{height - margin}" stroke="#344054"/>',
             f'<text x="{width / 2:.1f}" y="{height - 14}" text-anchor="middle" font-size="13" fill="#344054">memory bytes, lower is better</text>',
-            f'<text x="18" y="{height / 2:.1f}" text-anchor="middle" font-size="13" fill="#344054" transform="rotate(-90 18 {height / 2:.1f})">score, lower is better</text>',
+            f'<text x="18" y="{height / 2:.1f}" text-anchor="middle" font-size="13" fill="#344054" transform="rotate(-90 18 {height / 2:.1f})">{score_label}</text>',
             f'<text x="{margin}" y="{margin - 20}" font-size="16" fill="#101828">Pareto search candidates</text>',
             *points,
             "</svg>",
@@ -306,6 +315,7 @@ def write_multi_objective_report(
         "# Multi-Objective NAS Report",
         "",
         f"- Scores JSON: `{payload.get('scores_json')}`",
+        f"- Score direction: `{payload.get('score_direction', 'minimize')}`",
         f"- Pareto source: `{payload.get('pareto_source')}`",
         f"- Sweep solutions: `{len(payload.get('sweep_solutions', []))}`",
         f"- Pareto solutions: `{len(payload.get('pareto_front', []))}`",

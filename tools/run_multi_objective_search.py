@@ -179,6 +179,7 @@ def main() -> None:
         "batch_sizes": batch_sizes,
         "memory_fraction": None if args.no_memory_cap else args.memory_fraction,
         "runtime_fraction": None if args.no_runtime_cap else args.runtime_fraction,
+        "score_direction": args.score_direction,
         "memory_max_by_batch": {
             str(key): value for key, value in (constraints.memory_max_by_batch or {}).items()
         },
@@ -194,7 +195,7 @@ def main() -> None:
         "num_pareto_solutions": len(pareto_configs),
         "sweep_solutions": sweep_configs,
         "pareto_front": pareto_configs,
-        "plot_svg": pareto_svg(all_plot_solutions, front),
+        "plot_svg": pareto_svg(all_plot_solutions, front, score_direction=args.score_direction),
     }
 
     output_path = resolve_path(args.output_json)

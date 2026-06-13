@@ -4,17 +4,18 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "${SCRIPT_DIR}/00_common.sh"
 
-print_step "Step 1: prepare project-local environment"
+print_step "Step 1: prepare workspace-local environment"
 
 run_python - <<'PY'
+import os
 from pathlib import Path
 
 for path in [
-    "vendor/python",
-    "hf_cache/models",
-    "hf_cache/datasets",
-    "outputs",
-    "checkpoints",
+    os.environ["DISTILL_NAS_VENDOR_PYTHON"],
+    Path(os.environ["HF_HOME"]) / "models",
+    Path(os.environ["HF_HOME"]) / "datasets",
+    Path(os.environ["WORKFLOW_WORKDIR"]) / "outputs",
+    Path(os.environ["WORKFLOW_WORKDIR"]) / "checkpoints",
 ]:
     Path(path).mkdir(parents=True, exist_ok=True)
 print("project_dirs_ok=True")
@@ -64,13 +65,13 @@ PY
 )"
 
 if [[ -n "${missing}" ]]; then
-  print_step "Installing missing Python packages into vendor/python: ${missing}"
+  print_step "Installing missing Python packages into ${DISTILL_NAS_VENDOR_PYTHON}: ${missing}"
   if [[ "${missing}" == *torch* ]]; then
     echo "torch is missing. Install a CUDA-compatible torch in the base environment first." >&2
     exit 1
   fi
   run_python -m pip install \
-    --target vendor/python \
+    --target "${DISTILL_NAS_VENDOR_PYTHON}" \
     --upgrade \
     --force-reinstall \
     --no-cache-dir \
@@ -85,18 +86,19 @@ if [[ -n "${missing}" ]]; then
     "einops" \
     "datasets==5.0.0" \
     "transformers>=4.57,<5"
-  export PYTHONPATH="${PROJECT_ROOT}/vendor/python:${PROJECT_ROOT}:${PYTHONPATH:-}"
+  export PYTHONPATH="${DISTILL_NAS_VENDOR_PYTHON}:${PROJECT_ROOT}:${PYTHONPATH:-}"
 fi
 
 run_python - <<'PY'
 from __future__ import annotations
 
 import importlib.metadata
+import os
 import re
 import shutil
 from pathlib import Path
 
-vendor = Path("vendor/python")
+vendor = Path(os.environ["DISTILL_NAS_VENDOR_PYTHON"])
 if not vendor.exists():
     raise SystemExit
 
@@ -160,14 +162,14 @@ PY
 
 if [[ "${should_install_fla}" == "1" ]]; then
   print_step "Prepare flash-linear-attention source"
-  FLA_DIR="${FLA_DIR:-${PROJECT_ROOT}/vendor/flash-linear-attention}"
+  FLA_DIR="${FLA_DIR:-${DISTILL_NAS_VENDOR_DIR}/flash-linear-attention}"
   if [[ ! -d "${FLA_DIR}/.git" ]]; then
     rm -rf "${FLA_DIR}"
     git clone --depth 1 https://github.com/fla-org/flash-linear-attention.git "${FLA_DIR}"
   elif [[ "${UPDATE_FLA:-0}" =~ ^(1|true|yes|on)$ ]]; then
     git -C "${FLA_DIR}" pull --ff-only
   fi
-  export PYTHONPATH="${FLA_DIR}:${PROJECT_ROOT}/vendor/python:${PROJECT_ROOT}:${PYTHONPATH:-}"
+  export PYTHONPATH="${FLA_DIR}:${DISTILL_NAS_VENDOR_PYTHON}:${PROJECT_ROOT}:${PYTHONPATH:-}"
 fi
 
 print_step "Environment versions"

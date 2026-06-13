@@ -64,11 +64,22 @@ def _bool_env(value: Any) -> str:
     return "1" if bool(value) else "0"
 
 
-def spec_env(spec: dict[str, Any]) -> dict[str, str]:
+def experiment_workspace(spec: dict[str, Any], workdir: str | Path | None = None) -> Path:
+    workspace = workdir if workdir is not None else spec.get("workdir", ".")
+    return resolve_path(workspace)
+
+
+def _resolve_spec_path(path: Any, workspace: Path) -> Path:
+    return resolve_path(path, root=workspace)
+
+
+def spec_env(spec: dict[str, Any], output_dir: str | Path | None = None, workdir: str | Path | None = None) -> dict[str, str]:
     env: dict[str, str] = {}
     env.update({str(key): str(value) for key, value in spec.get("env", {}).items()})
-    output_dir = str(spec.get("output_dir", "outputs/distill_nas_workflow"))
-    env.setdefault("WORKFLOW_OUTPUT_DIR", output_dir)
+    workspace = experiment_workspace(spec, workdir=workdir)
+    resolved_output_dir = resolve_path(output_dir or spec.get("output_dir", "outputs/distill_nas_workflow"), root=workspace)
+    env.setdefault("WORKFLOW_WORKDIR", str(workspace))
+    env.setdefault("WORKFLOW_OUTPUT_DIR", str(resolved_output_dir))
     env.setdefault("WORKFLOW_BACKEND", str(spec.get("backend", "toy")))
     for key, value in spec.get("model", {}).items():
         env.setdefault(str(key).upper().replace("-", "_"), str(value))
@@ -93,34 +104,38 @@ def spec_env(spec: dict[str, Any]) -> dict[str, str]:
 
 
 def _python_cmd(script: str, *args: str) -> list[str]:
-    return [sys.executable, script, *args]
+    return [sys.executable, str(PROJECT_ROOT / script), *args]
 
 
-def build_stage_plan(spec: dict[str, Any]) -> list[StagePlan]:
-    root = PROJECT_ROOT
-    output_dir = resolve_path(spec.get("output_dir", "outputs/distill_nas_workflow"))
+def _script_cmd(script: str) -> list[str]:
+    return ["bash", str(PROJECT_ROOT / "scripts" / script)]
+
+
+def build_stage_plan(spec: dict[str, Any], workdir: str | Path | None = None) -> list[StagePlan]:
+    workspace = experiment_workspace(spec, workdir=workdir)
+    output_dir = resolve_path(spec.get("output_dir", "outputs/distill_nas_workflow"), root=workspace)
     expected = workflow_expected_outputs(output_dir)
-    env = spec_env(spec)
+    env = spec_env(spec, output_dir=output_dir, workdir=workspace)
     evaluation = spec.get("evaluation", {})
     profiling = spec.get("profiling", {})
     artifact = str(
-        evaluation.get("artifact_pth")
+        _resolve_spec_path(evaluation.get("artifact_pth"), workspace)
         if isinstance(evaluation, dict) and evaluation.get("artifact_pth")
         else output_dir / "08_global_knowledge_distillation" / "gkd_model.pth"
     )
     profile_artifact = str(
-        profiling.get("artifact_pth")
+        _resolve_spec_path(profiling.get("artifact_pth"), workspace)
         if isinstance(profiling, dict) and profiling.get("artifact_pth")
         else artifact
     )
 
     stages: dict[str, StagePlan] = {
-        "prepare": StagePlan("prepare", ["bash", "scripts/01_prepare_environment.sh"], skippable=False, env=env),
-        "validate": StagePlan("validate", ["bash", "scripts/02_validate_project.sh"], skippable=False, env=env),
-        "smoke": StagePlan("smoke", ["bash", "scripts/03_smoke_tiny_nas.sh"], skippable=False, env=env),
-        "bld": StagePlan("bld", ["bash", "scripts/04_bld_block_library.sh"], expected["bld"], env=env),
-        "score": StagePlan("score", ["bash", "scripts/05_nas_layer_importance.sh"], expected["score"], env=env),
-        "mip": StagePlan("mip", ["bash", "scripts/06_mip_topk_configs.sh"], expected["mip"], env=env),
+        "prepare": StagePlan("prepare", _script_cmd("01_prepare_environment.sh"), skippable=False, env=env),
+        "validate": StagePlan("validate", _script_cmd("02_validate_project.sh"), skippable=False, env=env),
+        "smoke": StagePlan("smoke", _script_cmd("03_smoke_tiny_nas.sh"), skippable=False, env=env),
+        "bld": StagePlan("bld", _script_cmd("04_bld_block_library.sh"), expected["bld"], env=env),
+        "score": StagePlan("score", _script_cmd("05_nas_layer_importance.sh"), expected["score"], env=env),
+        "mip": StagePlan("mip", _script_cmd("06_mip_topk_configs.sh"), expected["mip"], env=env),
         "multi_objective": StagePlan(
             "multi_objective",
             _python_cmd(
@@ -139,8 +154,8 @@ def build_stage_plan(spec: dict[str, Any]) -> list[StagePlan]:
             expected["multi_objective"],
             env=env,
         ),
-        "assemble": StagePlan("assemble", ["bash", "scripts/07_assemble_model_from_config.sh"], expected["assemble"], env=env),
-        "gkd": StagePlan("gkd", ["bash", "scripts/08_gkd_distill.sh"], expected["gkd"], env=env),
+        "assemble": StagePlan("assemble", _script_cmd("07_assemble_model_from_config.sh"), expected["assemble"], env=env),
+        "gkd": StagePlan("gkd", _script_cmd("08_gkd_distill.sh"), expected["gkd"], env=env),
         "evaluate": StagePlan(
             "evaluate",
             _python_cmd(
@@ -219,14 +234,14 @@ def filter_plan_from_stage(plan: list[StagePlan], from_stage: str | None, only_s
     return filtered
 
 
-def run_stage(stage: StagePlan, force: bool = False, dry_run: bool = False, cwd: str | Path = PROJECT_ROOT) -> str:
+def run_stage(stage: StagePlan, force: bool = False, dry_run: bool = False, cwd: str | Path | None = None) -> str:
     if stage.skippable and not force and outputs_exist(stage.outputs):
         return "skipped"
     if dry_run:
         return "dry_run"
     env = os.environ.copy()
     env.update(stage.env)
-    subprocess.run(stage.command, cwd=resolve_path(cwd), env=env, check=True)
+    subprocess.run(stage.command, cwd=resolve_path(cwd or "."), env=env, check=True)
     return "completed"
 
 
@@ -236,11 +251,14 @@ def run_experiment(
     dry_run: bool = False,
     from_stage: str | None = None,
     only_stage: str | None = None,
+    workdir: str | Path | None = None,
 ) -> list[dict[str, Any]]:
-    plan = filter_plan_from_stage(build_stage_plan(spec), from_stage=from_stage, only_stage=only_stage)
+    workspace = experiment_workspace(spec, workdir=workdir)
+    workspace.mkdir(parents=True, exist_ok=True)
+    plan = filter_plan_from_stage(build_stage_plan(spec, workdir=workspace), from_stage=from_stage, only_stage=only_stage)
     results: list[dict[str, Any]] = []
     for stage in plan:
-        status = run_stage(stage, force=force, dry_run=dry_run)
+        status = run_stage(stage, force=force, dry_run=dry_run, cwd=workspace)
         results.append(
             {
                 "stage": stage.name,
