@@ -1,0 +1,13 @@
+name: omnidistill-nas
+channels:
+  - pytorch
+  - conda-forge
+dependencies:
+  - python=3.11
+  - pip
+  - numpy
+  - scipy
+  - pyyaml
+  - pytorch
+  - pip:
+      - -e ".[dev,docs]"

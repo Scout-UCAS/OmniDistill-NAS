@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 import subprocess
 import sys
+import tempfile
+from pathlib import Path
 
 
 def run(command: list[str]) -> None:
@@ -21,6 +23,36 @@ def main() -> None:
     run([sys.executable, "-m", "compileall", "distill_nas_core", "scripts", "tools", "tests"])
     run([sys.executable, "-m", "pytest", "-q"])
     run([sys.executable, "-m", "distill_nas_core.cli", "--help"])
+    run([sys.executable, "-m", "distill_nas_core.cli", "validate", "configs/toy_experiment.json"])
+    run([sys.executable, "-m", "distill_nas_core.cli", "validate", "benchmarks/suites/toy_smoke.json", "--kind", "benchmark"])
+    run([sys.executable, "-m", "distill_nas_core.cli", "validate", "results/toy_smoke/manifest.json", "--kind", "result"])
+    with tempfile.TemporaryDirectory() as tmp:
+        tmp_path = Path(tmp)
+        run(
+            [
+                sys.executable,
+                "-m",
+                "distill_nas_core.cli",
+                "benchmark",
+                "--suite",
+                "benchmarks/suites/toy_smoke.json",
+                "--dry-run",
+                "--result-dir",
+                str(tmp_path / "benchmark_runs"),
+            ]
+        )
+        run(
+            [
+                sys.executable,
+                "-m",
+                "distill_nas_core.cli",
+                "report",
+                "--results-dir",
+                "results",
+                "--output-md",
+                str(tmp_path / "results.md"),
+            ]
+        )
     for script in [
         "tools/run_qwen3_attention_search.py",
         "tools/run_staged_model_pipeline.py",

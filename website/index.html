@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>OmniDistill-NAS</title>
+    <link rel="stylesheet" href="styles.css">
+  </head>
+  <body>
+    <header class="hero">
+      <nav>
+        <strong>OmniDistill-NAS</strong>
+        <span>Benchmarks</span>
+        <span>Docs</span>
+        <span>Results</span>
+      </nav>
+      <section class="hero-grid">
+        <div>
+          <h1>OmniDistill-NAS</h1>
+          <p>Distillation-guided architecture search for LLM, VLM, and VLA inference.</p>
+          <pre>omnidistill benchmark --suite benchmarks/suites/toy_smoke.json</pre>
+        </div>
+        <img src="assets/architecture.svg" alt="OmniDistill-NAS staged workflow diagram">
+      </section>
+    </header>
+    <main>
+      <section>
+        <h2>Workflow</h2>
+        <div class="grid">
+          <article><h3>Search</h3><p>Score layer replacements and solve constrained MIP objectives.</p></article>
+          <article><h3>Pareto</h3><p>Explore quality, memory, and runtime trade-offs with reproducible reports.</p></article>
+          <article><h3>Distill</h3><p>Assemble selected students and refine them with global distillation.</p></article>
+          <article><h3>Ship</h3><p>Evaluate, profile, export, and publish result manifests.</p></article>
+        </div>
+      </section>
+      <section>
+        <h2>Project Links</h2>
+        <p>Read the docs in <code>docs/</code>, run suites from <code>benchmarks/</code>, and publish manifests in <code>results/</code>.</p>
+      </section>
+    </main>
+  </body>
+</html>

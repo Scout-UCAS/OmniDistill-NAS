@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OmniDistill-NAS experiment spec",
+  "type": "object",
+  "required": ["backend", "stages"],
+  "properties": {
+    "name": {"type": "string"},
+    "backend": {"type": "string"},
+    "output_dir": {"type": "string"},
+    "workdir": {"type": "string"},
+    "stages": {
+      "oneOf": [
+        {"type": "string"},
+        {"type": "array", "items": {"type": "string"}}
+      ]
+    },
+    "model": {"type": "object"},
+    "search": {"type": "object"},
+    "distillation": {"type": "object"},
+    "devices": {"type": "object"},
+    "distributed": {"type": "object"},
+    "evaluation": {"type": "object"},
+    "profiling": {"type": "object"},
+    "env": {"type": "object"}
+  },
+  "additionalProperties": true
+}

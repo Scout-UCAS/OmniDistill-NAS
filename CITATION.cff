@@ -1,0 +1,10 @@
+cff-version: 1.2.0
+message: "If you use OmniDistill-NAS, please cite the repository."
+title: "OmniDistill-NAS"
+authors:
+  - name: "OmniDistill-NAS contributors"
+date-released: "2026-06-13"
+version: "0.1.0"
+license: "MIT"
+repository-code: "https://github.com/Scout-UCAS/OmniDistill-NAS"
+abstract: "Distillation-guided neural architecture search for efficient LLM, VLM, and VLA inference experiments."

@@ -1,6 +1,6 @@
 # OmniDistill-NAS
 
-本仓库是 **OmniDistill-NAS**，根据 [`distillation_nas_paper.pdf`](../distillation_nas_paper.pdf) 中的论文 **Distillation-Based NAS for Inference-Optimized LLMs** 实现了一个轻量、可本地运行的蒸馏式架构搜索框架。
+本仓库是 **OmniDistill-NAS**，根据 `distillation_nas_paper.pdf` 中的论文 **Distillation-Based NAS for Inference-Optimized LLMs** 实现了一个轻量、可本地运行的蒸馏式架构搜索框架。
 
 论文原方法面向 Llama/Nemotron 等大模型，并依赖真实硬件上的推理 profiling 数据。本实现保留论文的核心算法流程，同时提供两个后端：小型 causal Transformer 用于快速本地验证，Qwen 风格 LLM/VLM/VLA 后端用于真实模型的分阶段 BLD、NAS 打分、MIP、组装和 GKD/OPD。
 
@@ -101,6 +101,14 @@ omnidistill run --config configs/toy_experiment.json --from-stage evaluate
 omnidistill status --workflow-dir outputs/distill_nas_workflow
 ```
 
+配置校验、benchmark suite 和结果索引也可以直接用 CLI：
+
+```bash
+omnidistill validate configs/toy_experiment.json
+omnidistill benchmark --suite benchmarks/suites/toy_smoke.json --dry-run
+omnidistill report --results-dir results
+```
+
 默认 toy 配置在 04-08 论文阶段后增加：
 
 - `evaluate`：输出 `09_evaluation/metrics.json`。
@@ -138,6 +146,7 @@ TOP_K=5 CONFIG_RANK=1 GKD_STEPS=20 bash scripts/run_all.sh
 - `distill_nas_core.toy`：用于 demo 的小型 causal language model。
 - `distill_nas_core.experiment`：实验配置、resume/cache 和阶段执行。
 - `distill_nas_core.evaluation`、`profiler`、`export`、`reporting`：评测、实测 profiling、导出和报告生成。
+- `distill_nas_core.benchmarks`、`schema`、`result_zoo`、`tracking`、`plugins`：benchmark manifest、配置校验、结果索引、事件追踪和插件注册。
 - `distill_nas_core.data_adapters`、`quantization`、`distributed`、`vla`：数据集、量化校准、设备计划和 VLA rollout 的扩展点。
 
 ## 多目标搜索

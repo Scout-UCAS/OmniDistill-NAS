@@ -27,7 +27,6 @@ from tools.run_qwen3_attention_search import (
     dtype_nbytes,
     effective_param_memory_bytes,
     expand_variants,
-    find_decoder_layers,
     kv_cache_bytes,
     load_model_bundle,
     load_prompts_from_args,

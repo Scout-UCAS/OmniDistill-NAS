@@ -3,19 +3,24 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
 
 import torch
 
+from distill_nas_core.benchmarks import load_benchmark_suite, run_benchmark_suite
 from distill_nas_core.cli import main as cli_main
 from distill_nas_core.data_adapters import load_examples
 from distill_nas_core.evaluation import evaluate_artifact
 from distill_nas_core.experiment import build_stage_plan, run_experiment
 from distill_nas_core.export import export_artifact, load_export_manifest
+from distill_nas_core.plugins import list_plugins, register_plugin
 from distill_nas_core.profiler import profile_artifact
 from distill_nas_core.reporting import write_workflow_report
+from distill_nas_core.result_zoo import load_result_manifests, write_result_index
+from distill_nas_core.schema import validate_benchmark_suite, validate_experiment_spec, validate_result_manifest
 from distill_nas_core.search_space import (
     AttentionSpec,
     attention_spec_from_name,
@@ -130,9 +135,78 @@ class PlatformToolsTest(unittest.TestCase):
         pyproject = Path(__file__).resolve().parents[1] / "pyproject.toml"
         text = pyproject.read_text(encoding="utf-8")
 
-        self.assertIn('license = {file = "LICENSE"}', text)
+        self.assertIn('license = "MIT"', text)
         self.assertIn('omnidistill = "distill_nas_core.cli:main"', text)
         self.assertIn('readme = "README.md"', text)
+
+    def test_public_schema_validators_accept_project_manifests(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        experiment = json.loads((root / "configs" / "toy_experiment.json").read_text(encoding="utf-8"))
+        benchmark = json.loads((root / "benchmarks" / "suites" / "toy_smoke.json").read_text(encoding="utf-8"))
+        result = json.loads((root / "results" / "toy_smoke" / "manifest.json").read_text(encoding="utf-8"))
+
+        self.assertEqual(validate_experiment_spec(experiment), [])
+        self.assertEqual(validate_benchmark_suite(benchmark), [])
+        self.assertEqual(validate_result_manifest(result), [])
+
+    def test_benchmark_suite_dry_run_and_cli(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        suite = root / "benchmarks" / "suites" / "toy_smoke.json"
+        loaded = load_benchmark_suite(suite)
+        self.assertEqual(loaded["name"], "toy-smoke")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            payload = run_benchmark_suite(suite, result_dir=Path(tmp) / "runs", dry_run=True, workdir=tmp)
+            self.assertTrue((Path(tmp) / "runs" / "benchmark_results.json").exists())
+
+        self.assertEqual(payload["benchmarks"][0]["status"], "dry_run")
+
+        stdout = io.StringIO()
+        with tempfile.TemporaryDirectory() as tmp, contextlib.redirect_stdout(stdout):
+            exit_code = cli_main(
+                [
+                    "benchmark",
+                    "--suite",
+                    str(suite),
+                    "--dry-run",
+                    "--result-dir",
+                    str(Path(tmp) / "runs"),
+                ]
+            )
+        self.assertEqual(exit_code, 0)
+        self.assertIn("toy_full_workflow", stdout.getvalue())
+
+    def test_result_zoo_report_and_tracking(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        manifests = load_result_manifests(root / "results")
+        self.assertEqual(manifests[0]["id"], "toy_smoke")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            report = write_result_index(root / "results", Path(tmp) / "results.md")
+            self.assertIn("Toy full workflow smoke", report.read_text(encoding="utf-8"))
+
+            tracking_path = Path(tmp) / "events.jsonl"
+            old_provider = os.environ.get("OMNIDISTILL_TRACKING")
+            old_file = os.environ.get("OMNIDISTILL_TRACKING_FILE")
+            os.environ["OMNIDISTILL_TRACKING"] = "jsonl"
+            os.environ["OMNIDISTILL_TRACKING_FILE"] = str(tracking_path)
+            try:
+                run_benchmark_suite(root / "benchmarks" / "suites" / "toy_smoke.json", result_dir=Path(tmp) / "runs", dry_run=True)
+            finally:
+                if old_provider is None:
+                    os.environ.pop("OMNIDISTILL_TRACKING", None)
+                else:
+                    os.environ["OMNIDISTILL_TRACKING"] = old_provider
+                if old_file is None:
+                    os.environ.pop("OMNIDISTILL_TRACKING_FILE", None)
+                else:
+                    os.environ["OMNIDISTILL_TRACKING_FILE"] = old_file
+            self.assertTrue(tracking_path.exists())
+
+    def test_plugin_registry(self) -> None:
+        register_plugin("unit-test-evaluator", "evaluator", "Unit test evaluator.")
+        names = {item["name"] for item in list_plugins("evaluator")}
+        self.assertIn("unit-test-evaluator", names)
 
     def test_attention_variant_plugin_registration(self) -> None:
         def spec_factory(name: str, _parent_num_heads: int) -> AttentionSpec:

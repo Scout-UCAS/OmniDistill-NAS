@@ -29,7 +29,6 @@ from distill_nas_core.search_space import (
 from distill_nas_core.toy_assembly import (
     assemble_student_from_bld,
     block_key,
-    block_library_map,
     build_parent_model,
     config_from_dict,
     reconstruct_block,
@@ -238,7 +237,6 @@ def score_records_from_bld(args: argparse.Namespace) -> tuple[dict[str, Any], li
     device = resolve_device(args.device)
     parent = build_parent_model(artifact)
     token_batches = make_token_batches(artifact, count=args.score_batches)
-    library = block_library_map(artifact)
     batch_sizes = [int(item) for item in args.batch_sizes.split(",") if item.strip()]
     scores: list[dict[str, Any]] = []
     combo_scores: dict[tuple[int, str, str], dict[str, Any]] = {}

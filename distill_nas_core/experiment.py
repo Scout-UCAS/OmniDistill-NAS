@@ -235,10 +235,10 @@ def filter_plan_from_stage(plan: list[StagePlan], from_stage: str | None, only_s
 
 
 def run_stage(stage: StagePlan, force: bool = False, dry_run: bool = False, cwd: str | Path | None = None) -> str:
-    if stage.skippable and not force and outputs_exist(stage.outputs):
-        return "skipped"
     if dry_run:
         return "dry_run"
+    if stage.skippable and not force and outputs_exist(stage.outputs):
+        return "skipped"
     env = os.environ.copy()
     env.update(stage.env)
     subprocess.run(stage.command, cwd=resolve_path(cwd or "."), env=env, check=True)

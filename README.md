@@ -14,8 +14,8 @@ profiled artifact. It is designed for research workflows where quality,
 latency, memory, and deployment constraints have to be explored together.
 
 ```bash
-python3 tools/run_tiny_nas.py --quick
-bash scripts/run_all.sh
+omnidistill benchmark --suite benchmarks/suites/toy_smoke.json --dry-run
+omnidistill run --config configs/toy_experiment.json
 ```
 
 ## Why OmniDistill-NAS
@@ -35,6 +35,8 @@ place to run that loop end to end.
   vision-language-action workflows share the same staged interface.
 - **Operational workflow**: evaluation, profiling, export manifests, status
   checks, local CI, and resumable config-driven experiments are included.
+- **Benchmark and result zoo**: benchmark manifests, schema validation, and
+  reproducible result manifests make claims auditable.
 - **Open extension points**: add datasets, attention variants, quantization
   checks, distributed plans, or rollout evaluators without rewriting the
   pipeline.
@@ -46,7 +48,7 @@ For local development:
 ```bash
 git clone git@github.com:Scout-UCAS/OmniDistill-NAS.git
 cd OmniDistill-NAS
-python3 -m pip install -e ".[dev]"
+python3 -m pip install -e ".[dev,docs]"
 ```
 
 The workflow scripts can also prepare workspace-local optional dependencies
@@ -91,6 +93,13 @@ omnidistill run --config configs/toy_experiment.json --from-stage evaluate
 Use `--workdir /path/to/workspace` to keep outputs, checkpoints, caches, and
 vendored optional dependencies outside the source tree.
 
+Create and validate new experiment specs:
+
+```bash
+omnidistill init --output configs/my_experiment.json
+omnidistill validate configs/my_experiment.json
+```
+
 ## Workflow
 
 The default workflow is split into small, inspectable scripts:
@@ -111,6 +120,25 @@ The default workflow is split into small, inspectable scripts:
 | Export | `scripts/11_export_and_report.sh` | portable export and report |
 
 More detail: [docs/scripts.md](docs/scripts.md)
+
+## Benchmarks and Results
+
+Run the lightweight suite:
+
+```bash
+omnidistill benchmark --suite benchmarks/suites/toy_smoke.json --dry-run
+omnidistill benchmark --suite benchmarks/suites/toy_smoke.json
+```
+
+Real-model benchmark manifests are included for Qwen text, Qwen-style VLM, and
+OpenVLA-style VLA smoke runs. They are dry-run safe by default and require
+`--allow-commands` before external commands execute.
+
+```bash
+omnidistill benchmark --suite benchmarks/suites/qwen3_text_smoke.json --dry-run
+omnidistill validate results/toy_smoke/manifest.json --kind result
+omnidistill report --results-dir results
+```
 
 ## Multi-Objective Search
 
@@ -192,6 +220,11 @@ tools/                 Python CLI tools
 tests/                 Unit and integration tests
 configs/               Experiment specs
 docs/                  Extended English and Chinese documentation
+benchmarks/            Benchmark suite manifests
+results/               Reproducible result manifests
+schemas/               Public JSON schema files
+notebooks/             Colab and notebook demos
+website/               Static project homepage
 outputs/               Generated workflow artifacts, ignored by Git
 checkpoints/           Generated model checkpoints, ignored by Git
 ```
@@ -219,6 +252,9 @@ the staged toy pipeline.
 - [Full English documentation](docs/README.md)
 - [中文说明](docs/README.zh-CN.md)
 - [Workflow script reference](docs/scripts.md)
+- [Benchmark guide](docs/benchmarking.md)
+- [Design notes](docs/design.md)
+- [API reference](docs/api.md)
 
 ## Status
 

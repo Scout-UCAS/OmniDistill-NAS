@@ -3,7 +3,7 @@
 中文说明见 [README.zh-CN.md](README.zh-CN.md)。
 
 This repository contains **OmniDistill-NAS**, a compact, runnable implementation of the main ideas
-from [`distillation_nas_paper.pdf`](../distillation_nas_paper.pdf): **Distillation-Based NAS for
+from `distillation_nas_paper.pdf`: **Distillation-Based NAS for
 Inference-Optimized LLMs**.
 
 The implementation keeps the same stages as the paper and exposes two
@@ -66,6 +66,14 @@ omnidistill run --config configs/toy_experiment.json --from-stage evaluate
 omnidistill status --workflow-dir outputs/distill_nas_workflow
 ```
 
+Benchmark and result-zoo commands are first-class CLI paths:
+
+```bash
+omnidistill validate configs/toy_experiment.json
+omnidistill benchmark --suite benchmarks/suites/toy_smoke.json --dry-run
+omnidistill report --results-dir results
+```
+
 `run_experiment.py` skips completed artifact-producing stages unless
 `--force` is set. The default toy spec runs the paper stages and then adds:
 
@@ -102,6 +110,9 @@ python3 tools/generate_report.py --workflow-dir outputs/distill_nas_workflow
   stage execution.
 - `distill_nas_core.evaluation`, `profiler`, `export`, and `reporting`:
   evaluation, measured profiling, portable exports, and generated run reports.
+- `distill_nas_core.benchmarks`, `schema`, `result_zoo`, `tracking`, and
+  `plugins`: benchmark manifests, validation, result indexing, event logging,
+  and extension registration.
 - `distill_nas_core.data_adapters`, `quantization`, `distributed`, and `vla`:
   extension points for datasets, calibration, device plans, and VLA rollouts.
 

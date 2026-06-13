@@ -1,0 +1,24 @@
+site_name: OmniDistill-NAS
+site_description: Distillation-guided neural architecture search for LLM, VLM, and VLA inference.
+repo_url: https://github.com/Scout-UCAS/OmniDistill-NAS
+theme:
+  name: mkdocs
+nav:
+  - Home: README.md
+  - Scripts: scripts.md
+  - Benchmarks: benchmarking.md
+  - Result Zoo: result_zoo.md
+  - Tracking: tracking.md
+  - Plugins: plugins.md
+  - Design: design.md
+  - API: api.md
+  - Tutorials:
+      - Toy Workflow: tutorials/toy_workflow.md
+      - Qwen Text: tutorials/qwen3_text.md
+      - VLM and VLA: tutorials/vlm_vla.md
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: ["."]

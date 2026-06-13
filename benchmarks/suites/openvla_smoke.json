@@ -1,0 +1,33 @@
+{
+  "schema_version": 1,
+  "name": "openvla-smoke",
+  "description": "Vision-language-action smoke benchmark for action-output scoring.",
+  "benchmarks": [
+    {
+      "id": "openvla_action_smoke",
+      "task": "vision-language-action-compression",
+      "backend": "vla",
+      "command": [
+        "python3",
+        "tools/run_qwen3_attention_search.py",
+        "--model-id",
+        "openvla/openvla-7b",
+        "--model-kind",
+        "vla",
+        "--device",
+        "gpu",
+        "--prompt-source",
+        "built_in",
+        "--allow-blank-image",
+        "--max-prompts",
+        "1",
+        "--max-layers",
+        "1",
+        "--variants",
+        "parent,parent_attn,mha_attn,quant_mha_attn,mqa_attn,linear_attn,noop_attn"
+      ],
+      "tags": ["openvla", "vla", "gpu"],
+      "expected_metrics": ["action_loss", "runtime", "parameter_memory_bytes"]
+    }
+  ]
+}

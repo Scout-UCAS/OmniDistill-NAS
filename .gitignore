@@ -8,6 +8,9 @@ __pycache__/
 .ruff_cache/
 build/
 dist/
+htmlcov/
+.coverage
+site/
 
 # Virtual environments and vendored dependencies
 .venv/
@@ -17,6 +20,7 @@ vendor/python/
 # Model/data caches and generated artifacts
 hf_cache/
 outputs/
+benchmark_runs/
 checkpoints/
 .cache/
 

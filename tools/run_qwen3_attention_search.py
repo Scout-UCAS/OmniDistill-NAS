@@ -64,7 +64,7 @@ except ImportError:  # pragma: no cover - depends on transformers version
     AutoModelForVision2Seq = None
 
 from distill_nas_core.blocks import QuantizedLinear
-from distill_nas_core.distill import AUXILIARY_BATCH_KEYS, forward_batch as safe_forward_batch
+from distill_nas_core.distill import forward_batch as safe_forward_batch
 from distill_nas_core.mip import SearchCandidate, SearchConstraints, solve_nas_mip
 
 
