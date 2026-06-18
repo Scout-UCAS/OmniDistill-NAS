@@ -14,10 +14,30 @@ from .schema import raise_if_errors, validate_benchmark_suite
 from .tracking import emit_tracking_event
 
 
-def resolve_benchmark_command(command: list[Any]) -> list[str]:
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _resolve_command_part(part: str, roots: list[Path]) -> str:
+    path = Path(part)
+    if path.is_absolute() or part.startswith("-"):
+        return part
+    for root in roots:
+        candidate = (root / path).resolve()
+        if candidate.exists():
+            return str(candidate)
+    return part
+
+
+def resolve_benchmark_command(command: list[Any], root: str | Path | None = None) -> list[str]:
     resolved = [str(part) for part in command]
     if resolved and resolved[0] in {"python", "python3"}:
         resolved[0] = sys.executable
+    roots = [PROJECT_ROOT]
+    if root is not None:
+        suite_root = Path(root).resolve()
+        roots.insert(0, suite_root)
+        roots.insert(1, suite_root.parent)
+    resolved = [_resolve_command_part(part, roots) for part in resolved]
     return resolved
 
 
@@ -46,7 +66,7 @@ def benchmark_plan(suite: dict[str, Any], suite_root: str | Path | None = None) 
         if "config" in item:
             record["config"] = str(resolve_path(item["config"], root=root))
         if "command" in item:
-            record["command"] = resolve_benchmark_command(item["command"])
+            record["command"] = resolve_benchmark_command(item["command"], root=root)
         plan.append(record)
     return plan
 
@@ -85,7 +105,7 @@ def run_benchmark_suite(
             if configured_output_dir is not None:
                 record["configured_output_dir"] = str(configured_output_dir)
         elif "command" in item:
-            command = resolve_benchmark_command(item["command"])
+            command = resolve_benchmark_command(item["command"], root=suite_root)
             record["command"] = command
             if dry_run:
                 record["status"] = "dry_run"

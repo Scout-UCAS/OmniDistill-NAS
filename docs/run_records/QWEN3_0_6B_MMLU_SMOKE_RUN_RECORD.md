@@ -36,7 +36,7 @@ OK
 工作目录：
 
 ```text
-/root/autodl-tmp/PUZZLE
+$REMOTE_WORKDIR
 ```
 
 环境检查：
@@ -52,8 +52,8 @@ huggingface_hub 0.36.2
 `datasets` 安装到了项目目录：
 
 ```bash
-/root/miniconda3/bin/python -m pip install --target vendor/python --upgrade --no-cache-dir datasets
-/root/miniconda3/bin/python -m pip install --target vendor/python --upgrade --no-cache-dir "huggingface-hub>=0.30.0,<1.0"
+$PYTHON -m pip install --target vendor/python --upgrade --no-cache-dir datasets
+$PYTHON -m pip install --target vendor/python --upgrade --no-cache-dir "huggingface-hub>=0.30.0,<1.0"
 ```
 
 第二条命令用于修正 `datasets` 默认拉取的 `huggingface-hub 1.x` 与 `transformers 4.52.4` 不兼容的问题。
@@ -62,7 +62,7 @@ huggingface_hub 0.36.2
 
 ```bash
 HF_ENDPOINT=https://hf-mirror.com HF_HUB_DISABLE_XET=1 \
-PYTHONDONTWRITEBYTECODE=1 /root/miniconda3/bin/python - <<'PY'
+PYTHONDONTWRITEBYTECODE=1 $PYTHON - <<'PY'
 from pathlib import Path
 from tools.run_qwen3_attention_search import load_mmlu_prompts
 prompts = load_mmlu_prompts("cais/mmlu", "abstract_algebra", "test", 1, Path("hf_cache/datasets"))
@@ -84,7 +84,7 @@ Question: Find the degree for the given field extension Q(sqrt(2), sqrt(3), sqrt
 
 ```bash
 HF_ENDPOINT=https://hf-mirror.com HF_HUB_DISABLE_XET=1 \
-PYTHONDONTWRITEBYTECODE=1 /root/miniconda3/bin/python tools/run_qwen3_attention_search.py \
+PYTHONDONTWRITEBYTECODE=1 $PYTHON tools/run_qwen3_attention_search.py \
   --model-id Qwen/Qwen3-0.6B \
   --device gpu \
   --dtype bf16 \
@@ -106,8 +106,8 @@ PYTHONDONTWRITEBYTECODE=1 /root/miniconda3/bin/python tools/run_qwen3_attention_
 selected_batch_size: 1
 total_kl_score: 1.1080771684646606
 selected: ["L0:linear_attn"]
-wrote: /root/autodl-tmp/PUZZLE/outputs/qwen3_0_6b_mmlu_smoke.json
-wrote_pth: /root/autodl-tmp/PUZZLE/checkpoints/qwen3_0_6b_mmlu_smoke.pth
+wrote: $REMOTE_WORKDIR/outputs/qwen3_0_6b_mmlu_smoke.json
+wrote_pth: $REMOTE_WORKDIR/checkpoints/qwen3_0_6b_mmlu_smoke.pth
 ```
 
 该次运行实际打分 10 个候选：
@@ -131,7 +131,7 @@ noop_attn
 
 ```bash
 HF_ENDPOINT=https://hf-mirror.com HF_HUB_DISABLE_XET=1 \
-PYTHONDONTWRITEBYTECODE=1 /root/miniconda3/bin/python tools/run_qwen3_attention_search.py \
+PYTHONDONTWRITEBYTECODE=1 $PYTHON tools/run_qwen3_attention_search.py \
   --model-id Qwen/Qwen3-0.6B \
   --device gpu \
   --dtype bf16 \
@@ -153,8 +153,8 @@ PYTHONDONTWRITEBYTECODE=1 /root/miniconda3/bin/python tools/run_qwen3_attention_
 selected_batch_size: 1
 total_kl_score: 1.3698714971542358
 selected: ["L0:linear_attn"]
-wrote: /root/autodl-tmp/PUZZLE/outputs/qwen3_0_6b_mmlu_all_attention_smoke_final.json
-wrote_pth: /root/autodl-tmp/PUZZLE/checkpoints/qwen3_0_6b_mmlu_all_attention_smoke_final.pth
+wrote: $REMOTE_WORKDIR/outputs/qwen3_0_6b_mmlu_all_attention_smoke_final.json
+wrote_pth: $REMOTE_WORKDIR/checkpoints/qwen3_0_6b_mmlu_all_attention_smoke_final.pth
 ```
 
 实际打分 22 个候选：

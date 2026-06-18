@@ -1,11 +1,11 @@
 # Qwen3-0.6B 加入 Flash Linear Attention 候选运行记录
 
-记录日期：2026-06-09  
-远端工作目录：`/root/autodl-tmp/PUZZLE`  
-远端服务器：`ssh -p 33052 root@connect.nma1.seetacloud.com`  
+记录日期：2026-06-09
+远端工作目录：`$REMOTE_WORKDIR`
+远端服务器：`ssh -p <ssh-port> <user>@<remote-host>`
 目标：将 [`fla-org/flash-linear-attention`](https://github.com/fla-org/flash-linear-attention) 中的 `LinearAttention` 作为 NAS 搜索候选项，不再只有 no-op 类候选。
 
-> 说明：本文不记录 SSH 密码。所有模型权重、Python 依赖、FLA 源码、JSON 输出和 `.pth` 输出均放在 `/root/autodl-tmp/PUZZLE` 下。
+> 说明：本文不记录 SSH 密码。所有模型权重、Python 依赖、FLA 源码、JSON 输出和 `.pth` 输出均放在 `$REMOTE_WORKDIR` 下。
 
 ## 1. 最终结论
 
@@ -28,11 +28,11 @@ fla_linear_attn
 远端已完成两次验证运行：
 
 ```text
-/root/autodl-tmp/PUZZLE/outputs/qwen3_0_6b_fla_smoke.json
-/root/autodl-tmp/PUZZLE/checkpoints/qwen3_0_6b_fla_smoke.pth
+$REMOTE_WORKDIR/outputs/qwen3_0_6b_fla_smoke.json
+$REMOTE_WORKDIR/checkpoints/qwen3_0_6b_fla_smoke.pth
 
-/root/autodl-tmp/PUZZLE/outputs/qwen3_0_6b_fla_attention_search.json
-/root/autodl-tmp/PUZZLE/checkpoints/qwen3_0_6b_fla_attention_search.pth
+$REMOTE_WORKDIR/outputs/qwen3_0_6b_fla_attention_search.json
+$REMOTE_WORKDIR/checkpoints/qwen3_0_6b_fla_attention_search.pth
 ```
 
 8 层正式运行确认：
@@ -57,8 +57,8 @@ examples/run_qwen3_attention_search.py
 - 优先从项目内 FLA 源码目录导入：
 
 ```text
-/root/autodl-tmp/PUZZLE/vendor/flash-linear-attention-v0.4.2
-/root/autodl-tmp/PUZZLE/vendor/flash-linear-attention
+$REMOTE_WORKDIR/vendor/flash-linear-attention-v0.4.2
+$REMOTE_WORKDIR/vendor/flash-linear-attention
 ```
 
 - 新增 `QwenCandidateLayer`，支持以下候选：
@@ -94,19 +94,19 @@ expand_v = parent_attn.o_proj.in_features / hidden_size
 torch 2.3.0+cu121
 cuda True
 gpu NVIDIA A800 80GB PCIe
-python /root/miniconda3/bin/python
+python $PYTHON
 ```
 
 已有模型缓存：
 
 ```text
-/root/autodl-tmp/PUZZLE/hf_cache/models
+$REMOTE_WORKDIR/hf_cache/models
 ```
 
 已有项目内依赖：
 
 ```text
-/root/autodl-tmp/PUZZLE/vendor/python
+$REMOTE_WORKDIR/vendor/python
 ```
 
 ## 4. 本地检查命令
@@ -144,8 +144,8 @@ OK
 命令：
 
 ```bash
-ssh -tt -p 33052 root@connect.nma1.seetacloud.com \
-  'cd /root/autodl-tmp/PUZZLE && /root/miniconda3/bin/python - <<'"'"'PY'"'"'
+ssh -tt -p <ssh-port> <user>@<remote-host> \
+  'cd $REMOTE_WORKDIR && $PYTHON - <<'"'"'PY'"'"'
 import importlib
 for name in ["triton", "einops", "ninja", "packaging", "torch"]:
     try:
@@ -175,13 +175,13 @@ torch OK 2.3.0+cu121
 命令：
 
 ```bash
-ssh -tt -p 33052 root@connect.nma1.seetacloud.com \
-  'cd /root/autodl-tmp/PUZZLE && \
-   /root/miniconda3/bin/pip install -q \
+ssh -tt -p <ssh-port> <user>@<remote-host> \
+  'cd $REMOTE_WORKDIR && \
+   $PIP install -q \
      --target vendor/python \
      --upgrade \
      --no-deps "triton==2.3.0" einops ninja && \
-   /root/miniconda3/bin/pip install -q \
+   $PIP install -q \
      --target vendor/python \
      --upgrade \
      --no-deps flash-linear-attention'
@@ -198,12 +198,13 @@ WARNING: Running pip as the 'root' user can result in broken permissions and con
 命令：
 
 ```bash
-ssh -tt -p 33052 root@connect.nma1.seetacloud.com \
-  'cd /root/autodl-tmp/PUZZLE && \
-   PYTHONDONTWRITEBYTECODE=1 /root/miniconda3/bin/python - <<'"'"'PY'"'"'
+ssh -tt -p <ssh-port> <user>@<remote-host> \
+  'cd $REMOTE_WORKDIR && \
+   PYTHONDONTWRITEBYTECODE=1 $PYTHON - <<'"'"'PY'"'"'
+import os
 import sys
 from pathlib import Path
-root = Path("/root/autodl-tmp/PUZZLE")
+root = Path(os.environ["REMOTE_WORKDIR"])
 sys.path.insert(0, str(root / "vendor/python"))
 import torch, triton, einops
 from fla.layers import LinearAttention
@@ -228,8 +229,8 @@ ModuleNotFoundError: No module named 'fla.ops'
 命令：
 
 ```bash
-ssh -tt -p 33052 root@connect.nma1.seetacloud.com \
-  'cd /root/autodl-tmp/PUZZLE && \
+ssh -tt -p <ssh-port> <user>@<remote-host> \
+  'cd $REMOTE_WORKDIR && \
    mkdir -p vendor && \
    git clone --depth 1 https://github.com/fla-org/flash-linear-attention.git vendor/flash-linear-attention'
 ```
@@ -274,8 +275,8 @@ rsync -az --delete \
   --exclude '.git' \
   --exclude '__pycache__' \
   /tmp/flash-linear-attention/ \
-  root@connect.nma1.seetacloud.com:/root/autodl-tmp/PUZZLE/vendor/flash-linear-attention/ \
-  -e 'ssh -p 33052 -o StrictHostKeyChecking=no'
+  <user>@<remote-host>:$REMOTE_WORKDIR/vendor/flash-linear-attention/ \
+  -e 'ssh -p <ssh-port> -o StrictHostKeyChecking=no'
 ```
 
 输出：
@@ -289,12 +290,13 @@ rsync -az --delete \
 命令：
 
 ```bash
-ssh -tt -p 33052 root@connect.nma1.seetacloud.com \
-  'cd /root/autodl-tmp/PUZZLE && \
-   PYTHONDONTWRITEBYTECODE=1 /root/miniconda3/bin/python - <<'"'"'PY'"'"'
+ssh -tt -p <ssh-port> <user>@<remote-host> \
+  'cd $REMOTE_WORKDIR && \
+   PYTHONDONTWRITEBYTECODE=1 $PYTHON - <<'"'"'PY'"'"'
+import os
 import sys
 from pathlib import Path
-root = Path("/root/autodl-tmp/PUZZLE")
+root = Path(os.environ["REMOTE_WORKDIR"])
 sys.path.insert(0, str(root / "vendor/flash-linear-attention"))
 sys.path.insert(1, str(root / "vendor/python"))
 import torch, triton
@@ -376,8 +378,8 @@ rsync -az --delete \
   --exclude '.git' \
   --exclude '__pycache__' \
   /tmp/flash-linear-attention-v0.4.2/ \
-  root@connect.nma1.seetacloud.com:/root/autodl-tmp/PUZZLE/vendor/flash-linear-attention-v0.4.2/ \
-  -e 'ssh -p 33052 -o StrictHostKeyChecking=no'
+  <user>@<remote-host>:$REMOTE_WORKDIR/vendor/flash-linear-attention-v0.4.2/ \
+  -e 'ssh -p <ssh-port> -o StrictHostKeyChecking=no'
 ```
 
 输出：
@@ -393,12 +395,13 @@ rsync -az --delete \
 验证命令：
 
 ```bash
-ssh -tt -p 33052 root@connect.nma1.seetacloud.com \
-  'cd /root/autodl-tmp/PUZZLE && \
-   PYTHONDONTWRITEBYTECODE=1 /root/miniconda3/bin/python - <<'"'"'PY'"'"'
+ssh -tt -p <ssh-port> <user>@<remote-host> \
+  'cd $REMOTE_WORKDIR && \
+   PYTHONDONTWRITEBYTECODE=1 $PYTHON - <<'"'"'PY'"'"'
+import os
 import sys
 from pathlib import Path
-root = Path("/root/autodl-tmp/PUZZLE")
+root = Path(os.environ["REMOTE_WORKDIR"])
 sys.path.insert(0, str(root / "vendor/flash-linear-attention-v0.4.2"))
 sys.path.insert(1, str(root / "vendor/python"))
 import torch, triton
@@ -416,10 +419,10 @@ AssertionError: Only cuda device is supported for PyTorch version < 2.4.0.
 修复：升级项目内 Triton。
 
 ```bash
-ssh -tt -p 33052 root@connect.nma1.seetacloud.com \
-  'cd /root/autodl-tmp/PUZZLE && \
+ssh -tt -p <ssh-port> <user>@<remote-host> \
+  'cd $REMOTE_WORKDIR && \
    rm -rf vendor/python/triton vendor/python/triton-* vendor/fla-0.4.2/triton vendor/fla-0.4.2/triton-* && \
-   /root/miniconda3/bin/pip install -q \
+   $PIP install -q \
      --target vendor/python \
      --upgrade \
      --no-deps "triton==3.2.0"'
@@ -538,8 +541,8 @@ rsync -az \
   --exclude 'hf_cache' \
   --exclude 'checkpoints' \
   --exclude 'outputs' \
-  -e 'ssh -p 33052 -o StrictHostKeyChecking=no' \
-  ./ root@connect.nma1.seetacloud.com:/root/autodl-tmp/PUZZLE/
+  -e 'ssh -p <ssh-port> -o StrictHostKeyChecking=no' \
+  ./ <user>@<remote-host>:$REMOTE_WORKDIR/
 ```
 
 输出：
@@ -553,27 +556,27 @@ rsync -az \
 ### 11.1 执行命令
 
 ```bash
-ssh -tt -p 33052 root@connect.nma1.seetacloud.com \
-  'cd /root/autodl-tmp/PUZZLE && \
+ssh -tt -p <ssh-port> <user>@<remote-host> \
+  'cd $REMOTE_WORKDIR && \
    HF_ENDPOINT=https://hf-mirror.com \
    HF_HUB_DISABLE_XET=1 \
    PYTHONDONTWRITEBYTECODE=1 \
-   /root/miniconda3/bin/python examples/run_qwen3_attention_search.py \
+   $PYTHON examples/run_qwen3_attention_search.py \
      --model-id Qwen/Qwen3-0.6B \
      --device gpu \
      --max-layers 1 \
      --max-prompts 1 \
      --seq-len 64 \
      --variants parent,skip_attn,fla_linear_attn \
-     --cache-dir /root/autodl-tmp/PUZZLE/hf_cache/models \
-     --output /root/autodl-tmp/PUZZLE/outputs/qwen3_0_6b_fla_smoke.json \
-     --pth-output /root/autodl-tmp/PUZZLE/checkpoints/qwen3_0_6b_fla_smoke.pth'
+     --cache-dir $REMOTE_WORKDIR/hf_cache/models \
+     --output $REMOTE_WORKDIR/outputs/qwen3_0_6b_fla_smoke.json \
+     --pth-output $REMOTE_WORKDIR/checkpoints/qwen3_0_6b_fla_smoke.pth'
 ```
 
 ### 11.2 输出
 
 ```text
-/root/autodl-tmp/PUZZLE/vendor/python/transformers/utils/hub.py:111: FutureWarning: Using `TRANSFORMERS_CACHE` is deprecated...
+$REMOTE_WORKDIR/vendor/python/transformers/utils/hub.py:111: FutureWarning: Using `TRANSFORMERS_CACHE` is deprecated...
 PyTorch < 2.4 detected - computations may be slower due to lack of optimizations
 {
   "selected_batch_size": 1,
@@ -585,8 +588,8 @@ PyTorch < 2.4 detected - computations may be slower due to lack of optimizations
     "L0:skip_attn"
   ]
 }
-wrote=/root/autodl-tmp/PUZZLE/outputs/qwen3_0_6b_fla_smoke.json
-wrote_pth=/root/autodl-tmp/PUZZLE/checkpoints/qwen3_0_6b_fla_smoke.pth
+wrote=$REMOTE_WORKDIR/outputs/qwen3_0_6b_fla_smoke.json
+wrote_pth=$REMOTE_WORKDIR/checkpoints/qwen3_0_6b_fla_smoke.pth
 ```
 
 ### 11.3 Smoke Test JSON 摘要
@@ -596,10 +599,10 @@ wrote_pth=/root/autodl-tmp/PUZZLE/checkpoints/qwen3_0_6b_fla_smoke.pth
   "model_id": "Qwen/Qwen3-0.6B",
   "device": "cuda",
   "dtype": "torch.bfloat16",
-  "root": "/root/autodl-tmp/PUZZLE",
-  "cache_dir": "/root/autodl-tmp/PUZZLE/hf_cache/models",
-  "vendor_dir": "/root/autodl-tmp/PUZZLE/vendor/python",
-  "fla_repo_dir": "/root/autodl-tmp/PUZZLE/vendor/flash-linear-attention-v0.4.2",
+  "root": "$REMOTE_WORKDIR",
+  "cache_dir": "$REMOTE_WORKDIR/hf_cache/models",
+  "vendor_dir": "$REMOTE_WORKDIR/vendor/python",
+  "fla_repo_dir": "$REMOTE_WORKDIR/vendor/flash-linear-attention-v0.4.2",
   "searched_layers": [0],
   "variants": ["parent", "skip_attn", "fla_linear_attn"],
   "fla": {
@@ -633,21 +636,21 @@ wrote_pth=/root/autodl-tmp/PUZZLE/checkpoints/qwen3_0_6b_fla_smoke.pth
 ### 12.1 执行命令
 
 ```bash
-ssh -tt -p 33052 root@connect.nma1.seetacloud.com \
-  'cd /root/autodl-tmp/PUZZLE && \
+ssh -tt -p <ssh-port> <user>@<remote-host> \
+  'cd $REMOTE_WORKDIR && \
    HF_ENDPOINT=https://hf-mirror.com \
    HF_HUB_DISABLE_XET=1 \
    PYTHONDONTWRITEBYTECODE=1 \
-   /root/miniconda3/bin/python examples/run_qwen3_attention_search.py \
+   $PYTHON examples/run_qwen3_attention_search.py \
      --model-id Qwen/Qwen3-0.6B \
      --device gpu \
      --max-layers 8 \
      --max-prompts 2 \
      --seq-len 128 \
      --variants parent,skip_attn,skip_mlp,skip_both,fla_linear_attn \
-     --cache-dir /root/autodl-tmp/PUZZLE/hf_cache/models \
-     --output /root/autodl-tmp/PUZZLE/outputs/qwen3_0_6b_fla_attention_search.json \
-     --pth-output /root/autodl-tmp/PUZZLE/checkpoints/qwen3_0_6b_fla_attention_search.pth'
+     --cache-dir $REMOTE_WORKDIR/hf_cache/models \
+     --output $REMOTE_WORKDIR/outputs/qwen3_0_6b_fla_attention_search.json \
+     --pth-output $REMOTE_WORKDIR/checkpoints/qwen3_0_6b_fla_attention_search.pth'
 ```
 
 ### 12.2 输出
@@ -675,8 +678,8 @@ ssh -tt -p 33052 root@connect.nma1.seetacloud.com \
 脚本写入：
 
 ```text
-wrote=/root/autodl-tmp/PUZZLE/outputs/qwen3_0_6b_fla_attention_search.json
-wrote_pth=/root/autodl-tmp/PUZZLE/checkpoints/qwen3_0_6b_fla_attention_search.pth
+wrote=$REMOTE_WORKDIR/outputs/qwen3_0_6b_fla_attention_search.json
+wrote_pth=$REMOTE_WORKDIR/checkpoints/qwen3_0_6b_fla_attention_search.pth
 ```
 
 说明：
@@ -689,15 +692,15 @@ wrote_pth=/root/autodl-tmp/PUZZLE/checkpoints/qwen3_0_6b_fla_attention_search.pt
 ### 13.1 验证命令
 
 ```bash
-ssh -tt -p 33052 root@connect.nma1.seetacloud.com \
-  'cd /root/autodl-tmp/PUZZLE && \
+ssh -tt -p <ssh-port> <user>@<remote-host> \
+  'cd $REMOTE_WORKDIR && \
    echo "== ls outputs checkpoints ==" && \
    ls -lh outputs/qwen3_0_6b_fla_smoke.json outputs/qwen3_0_6b_fla_attention_search.json \
           checkpoints/qwen3_0_6b_fla_smoke.pth checkpoints/qwen3_0_6b_fla_attention_search.pth && \
    echo "== du ==" && \
    du -sh vendor/flash-linear-attention-v0.4.2 vendor/python hf_cache outputs checkpoints && \
    echo "== json summary ==" && \
-   /root/miniconda3/bin/python - <<'"'"'PY'"'"'
+   $PYTHON - <<'"'"'PY'"'"'
 import json
 for path in ["outputs/qwen3_0_6b_fla_smoke.json", "outputs/qwen3_0_6b_fla_attention_search.json"]:
     data = json.load(open(path))
@@ -748,7 +751,7 @@ outputs/qwen3_0_6b_fla_attention_search.json
 ### 14.1 FLA 源码
 
 ```text
-/root/autodl-tmp/PUZZLE/vendor/flash-linear-attention-v0.4.2
+$REMOTE_WORKDIR/vendor/flash-linear-attention-v0.4.2
 ```
 
 说明：
@@ -760,7 +763,7 @@ outputs/qwen3_0_6b_fla_attention_search.json
 ### 14.2 Python 依赖
 
 ```text
-/root/autodl-tmp/PUZZLE/vendor/python
+$REMOTE_WORKDIR/vendor/python
 ```
 
 说明：
@@ -772,7 +775,7 @@ outputs/qwen3_0_6b_fla_attention_search.json
 ### 14.3 模型权重缓存
 
 ```text
-/root/autodl-tmp/PUZZLE/hf_cache/models
+$REMOTE_WORKDIR/hf_cache/models
 ```
 
 说明：
@@ -783,8 +786,8 @@ outputs/qwen3_0_6b_fla_attention_search.json
 ### 14.4 Smoke Test 输出
 
 ```text
-/root/autodl-tmp/PUZZLE/outputs/qwen3_0_6b_fla_smoke.json
-/root/autodl-tmp/PUZZLE/checkpoints/qwen3_0_6b_fla_smoke.pth
+$REMOTE_WORKDIR/outputs/qwen3_0_6b_fla_smoke.json
+$REMOTE_WORKDIR/checkpoints/qwen3_0_6b_fla_smoke.pth
 ```
 
 说明：
@@ -796,8 +799,8 @@ outputs/qwen3_0_6b_fla_attention_search.json
 ### 14.5 8 层正式运行输出
 
 ```text
-/root/autodl-tmp/PUZZLE/outputs/qwen3_0_6b_fla_attention_search.json
-/root/autodl-tmp/PUZZLE/checkpoints/qwen3_0_6b_fla_attention_search.pth
+$REMOTE_WORKDIR/outputs/qwen3_0_6b_fla_attention_search.json
+$REMOTE_WORKDIR/checkpoints/qwen3_0_6b_fla_attention_search.pth
 ```
 
 说明：

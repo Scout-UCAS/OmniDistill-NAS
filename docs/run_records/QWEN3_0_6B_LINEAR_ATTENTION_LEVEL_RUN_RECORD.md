@@ -1,10 +1,10 @@
 # Qwen3-0.6B Linear Attention 同级候选运行记录
 
-记录日期：2026-06-09  
-远端工作目录：`/root/autodl-tmp/PUZZLE`  
-远端服务器：`ssh -p 33052 root@connect.nma1.seetacloud.com`
+记录日期：2026-06-09
+远端工作目录：`$REMOTE_WORKDIR`
+远端服务器：`ssh -p <ssh-port> <user>@<remote-host>`
 
-> 说明：本文不记录 SSH 密码。模型权重、`transformers`/`datasets` 依赖、FLA 源码、JSON 输出和 `.pth` 输出均放在 `/root/autodl-tmp/PUZZLE` 下。
+> 说明：本文不记录 SSH 密码。模型权重、`transformers`/`datasets` 依赖、FLA 源码、JSON 输出和 `.pth` 输出均放在 `$REMOTE_WORKDIR` 下。
 
 ## 1. 本次目标
 
@@ -98,8 +98,8 @@ architecture:
 ### 3.1 远端单元测试
 
 ```bash
-cd /root/autodl-tmp/PUZZLE
-PYTHONDONTWRITEBYTECODE=1 /root/miniconda3/bin/python -m unittest discover -s tests
+cd $REMOTE_WORKDIR
+PYTHONDONTWRITEBYTECODE=1 $PYTHON -m unittest discover -s tests
 ```
 
 输出：
@@ -112,8 +112,8 @@ OK
 ### 3.2 远端 Tiny NAS 全量候选
 
 ```bash
-cd /root/autodl-tmp/PUZZLE
-PYTHONDONTWRITEBYTECODE=1 /root/miniconda3/bin/python tools/run_tiny_nas.py \
+cd $REMOTE_WORKDIR
+PYTHONDONTWRITEBYTECODE=1 $PYTHON tools/run_tiny_nas.py \
   --quick \
   --bld-steps 0 \
   --score-batches 1 \
@@ -134,7 +134,7 @@ architecture:
 ### 3.3 Qwen3 + MMLU：Qwen-native 与 linear 同级候选
 
 ```bash
-cd /root/autodl-tmp/PUZZLE
+cd $REMOTE_WORKDIR
 WORKFLOW_BACKEND=qwen \
 MODEL_ID=Qwen/Qwen3-0.6B \
 DEVICE=gpu \
@@ -173,7 +173,7 @@ selected=L0:linear_attn
 ### 3.4 Qwen3 + MMLU：全量 attention 候选
 
 ```bash
-cd /root/autodl-tmp/PUZZLE
+cd $REMOTE_WORKDIR
 WORKFLOW_BACKEND=qwen \
 MODEL_ID=Qwen/Qwen3-0.6B \
 DEVICE=gpu \
@@ -224,7 +224,7 @@ fla_moba_attn
 ### 3.5 重新生成 attention 级输出汇总
 
 ```bash
-cd /root/autodl-tmp/PUZZLE
+cd $REMOTE_WORKDIR
 WORKFLOW_BACKEND=qwen bash scripts/07_assemble_model_from_config.sh
 ```
 

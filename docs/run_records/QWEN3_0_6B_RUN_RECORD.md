@@ -1,10 +1,10 @@
 # Qwen3-0.6B Puzzle 远端运行记录
 
-记录日期：2026-06-09  
-远端工作目录：`/root/autodl-tmp/PUZZLE`  
-远端服务器：`ssh -p 33052 root@connect.nma1.seetacloud.com`  
+记录日期：2026-06-09
+远端工作目录：`$REMOTE_WORKDIR`
+远端服务器：`ssh -p <ssh-port> <user>@<remote-host>`
 
-> 说明：SSH 密码不写入本文档。所有模型权重、Python 依赖库、JSON 输出和 `.pth` 输出均已放在 `/root/autodl-tmp/PUZZLE` 下。
+> 说明：SSH 密码不写入本文档。所有模型权重、Python 依赖库、JSON 输出和 `.pth` 输出均已放在 `$REMOTE_WORKDIR` 下。
 
 ## 1. 涉及脚本
 
@@ -28,10 +28,10 @@ examples/run_qwen3_attention_search.py
 关键项目内路径：
 
 ```text
-/root/autodl-tmp/PUZZLE/vendor/python
-/root/autodl-tmp/PUZZLE/hf_cache/models
-/root/autodl-tmp/PUZZLE/outputs/qwen3_0_6b_layer_skip_search.json
-/root/autodl-tmp/PUZZLE/checkpoints/qwen3_0_6b_layer_skip_search.pth
+$REMOTE_WORKDIR/vendor/python
+$REMOTE_WORKDIR/hf_cache/models
+$REMOTE_WORKDIR/outputs/qwen3_0_6b_layer_skip_search.json
+$REMOTE_WORKDIR/checkpoints/qwen3_0_6b_layer_skip_search.pth
 ```
 
 ### 1.2 MIP 求解模块
@@ -53,10 +53,10 @@ puzzle_nas/mip.py
 ### 2.1 GPU 和 Python 探测命令
 
 ```bash
-ssh -tt -p 33052 root@connect.nma1.seetacloud.com \
-  'cd /root && mkdir -p /root/autodl-tmp/PUZZLE && \
+ssh -tt -p <ssh-port> <user>@<remote-host> \
+  'cd $REMOTE_PARENT_DIR && mkdir -p $REMOTE_WORKDIR && \
    nvidia-smi --query-gpu=name,memory.total,memory.free --format=csv,noheader && \
-   python3 --version && pwd && df -h /root/autodl-tmp'
+   python3 --version && pwd && df -h $REMOTE_PARENT_DIR'
 ```
 
 输出：
@@ -69,13 +69,13 @@ bash: line 1: python3: command not found
 结论：
 
 - GPU：`NVIDIA A800 80GB PCIe`
-- 远端无 `python3` 命令，但存在 `/root/miniconda3/bin/python`。
+- 远端无 `python3` 命令，但存在 `$PYTHON`。
 
 ### 2.2 Conda Python 和依赖探测命令
 
 ```bash
-ssh -tt -p 33052 root@connect.nma1.seetacloud.com \
-  'cd /root/autodl-tmp/PUZZLE && /root/miniconda3/bin/python - <<'"'"'PY'"'"'
+ssh -tt -p <ssh-port> <user>@<remote-host> \
+  'cd $REMOTE_WORKDIR && $PYTHON - <<'"'"'PY'"'"'
 import sys
 print(sys.executable)
 print(sys.version)
@@ -97,7 +97,7 @@ PY'
 输出：
 
 ```text
-/root/miniconda3/bin/python
+$PYTHON
 3.12.3 | packaged by Anaconda, Inc. | (main, May  6 2024, 19:46:43) [GCC 11.2.0]
 torch OK 2.3.0+cu121
 transformers NO ModuleNotFoundError No module named 'transformers'
@@ -119,8 +119,8 @@ capability (8, 0)
 rsync -az --delete \
   --exclude '__pycache__' \
   --exclude '.git' \
-  -e 'ssh -p 33052 -o StrictHostKeyChecking=no' \
-  ./ root@connect.nma1.seetacloud.com:/root/autodl-tmp/PUZZLE/
+  -e 'ssh -p <ssh-port> -o StrictHostKeyChecking=no' \
+  ./ <user>@<remote-host>:$REMOTE_WORKDIR/
 ```
 
 输出：
@@ -141,8 +141,8 @@ rsync -az \
   --exclude 'hf_cache' \
   --exclude 'checkpoints' \
   --exclude 'outputs' \
-  -e 'ssh -p 33052 -o StrictHostKeyChecking=no' \
-  ./ root@connect.nma1.seetacloud.com:/root/autodl-tmp/PUZZLE/
+  -e 'ssh -p <ssh-port> -o StrictHostKeyChecking=no' \
+  ./ <user>@<remote-host>:$REMOTE_WORKDIR/
 ```
 
 输出：
@@ -156,17 +156,17 @@ rsync -az \
 ### 4.1 创建项目内目录
 
 ```bash
-ssh -tt -p 33052 root@connect.nma1.seetacloud.com \
-  'cd /root/autodl-tmp/PUZZLE && \
+ssh -tt -p <ssh-port> <user>@<remote-host> \
+  'cd $REMOTE_WORKDIR && \
    mkdir -p vendor/python hf_cache/models checkpoints outputs'
 ```
 
 ### 4.2 安装依赖到 `vendor/python`
 
 ```bash
-ssh -tt -p 33052 root@connect.nma1.seetacloud.com \
-  'cd /root/autodl-tmp/PUZZLE && \
-   /root/miniconda3/bin/pip install -q \
+ssh -tt -p <ssh-port> <user>@<remote-host> \
+  'cd $REMOTE_WORKDIR && \
+   $PIP install -q \
      --target vendor/python \
      --upgrade \
      --no-deps \
@@ -186,10 +186,10 @@ WARNING: Running pip as the 'root' user can result in broken permissions and con
 原因：`transformers==4.52.4` 要求 `tokenizers>=0.21,<0.22`。
 
 ```bash
-ssh -tt -p 33052 root@connect.nma1.seetacloud.com \
-  'cd /root/autodl-tmp/PUZZLE && \
+ssh -tt -p <ssh-port> <user>@<remote-host> \
+  'cd $REMOTE_WORKDIR && \
    rm -rf vendor/python/tokenizers vendor/python/tokenizers-* && \
-   /root/miniconda3/bin/pip install -q \
+   $PIP install -q \
      --target vendor/python \
      --upgrade \
      --no-deps "tokenizers>=0.21,<0.22"'
@@ -206,10 +206,10 @@ WARNING: Running pip as the 'root' user can result in broken permissions and con
 原因：`transformers==4.52.4` 要求 `huggingface-hub>=0.30.0,<1.0`。
 
 ```bash
-ssh -tt -p 33052 root@connect.nma1.seetacloud.com \
-  'cd /root/autodl-tmp/PUZZLE && \
+ssh -tt -p <ssh-port> <user>@<remote-host> \
+  'cd $REMOTE_WORKDIR && \
    rm -rf vendor/python/huggingface_hub vendor/python/huggingface_hub-* vendor/python/huggingface-hub-* && \
-   /root/miniconda3/bin/pip install -q \
+   $PIP install -q \
      --target vendor/python \
      --upgrade \
      --no-deps "huggingface-hub>=0.30,<1.0"'
@@ -224,12 +224,13 @@ WARNING: Running pip as the 'root' user can result in broken permissions and con
 ### 4.5 项目内依赖验证
 
 ```bash
-ssh -tt -p 33052 root@connect.nma1.seetacloud.com \
-  'cd /root/autodl-tmp/PUZZLE && \
-   PYTHONDONTWRITEBYTECODE=1 /root/miniconda3/bin/python - <<'"'"'PY'"'"'
-import sys, os
+ssh -tt -p <ssh-port> <user>@<remote-host> \
+  'cd $REMOTE_WORKDIR && \
+   PYTHONDONTWRITEBYTECODE=1 $PYTHON - <<'"'"'PY'"'"'
+import os
+import sys
 from pathlib import Path
-root = Path("/root/autodl-tmp/PUZZLE")
+root = Path(os.environ["REMOTE_WORKDIR"])
 sys.path.insert(0, str(root / "vendor/python"))
 os.environ["HF_HOME"] = str(root / "hf_cache")
 import transformers, tokenizers, huggingface_hub, torch
@@ -244,11 +245,11 @@ PY'
 输出：
 
 ```text
-transformers 4.52.4 /root/autodl-tmp/PUZZLE/vendor/python/transformers/__init__.py
-tokenizers 0.21.4 /root/autodl-tmp/PUZZLE/vendor/python/tokenizers/__init__.py
-huggingface_hub 0.36.2 /root/autodl-tmp/PUZZLE/vendor/python/huggingface_hub/__init__.py
+transformers 4.52.4 $REMOTE_WORKDIR/vendor/python/transformers/__init__.py
+tokenizers 0.21.4 $REMOTE_WORKDIR/vendor/python/tokenizers/__init__.py
+huggingface_hub 0.36.2 $REMOTE_WORKDIR/vendor/python/huggingface_hub/__init__.py
 torch 2.3.0+cu121 cuda True
-hf_home /root/autodl-tmp/PUZZLE/hf_cache
+hf_home $REMOTE_WORKDIR/hf_cache
 ```
 
 ## 5. 项目测试
@@ -272,9 +273,9 @@ OK
 ### 5.2 远端测试命令
 
 ```bash
-ssh -tt -p 33052 root@connect.nma1.seetacloud.com \
-  'cd /root/autodl-tmp/PUZZLE && \
-   PYTHONDONTWRITEBYTECODE=1 /root/miniconda3/bin/python -m unittest'
+ssh -tt -p <ssh-port> <user>@<remote-host> \
+  'cd $REMOTE_WORKDIR && \
+   PYTHONDONTWRITEBYTECODE=1 $PYTHON -m unittest'
 ```
 
 输出：
@@ -292,20 +293,20 @@ OK
 ### 6.1 执行命令
 
 ```bash
-ssh -tt -p 33052 root@connect.nma1.seetacloud.com \
-  'cd /root/autodl-tmp/PUZZLE && \
+ssh -tt -p <ssh-port> <user>@<remote-host> \
+  'cd $REMOTE_WORKDIR && \
    HF_ENDPOINT=https://hf-mirror.com \
    HF_HUB_DISABLE_XET=1 \
    PYTHONDONTWRITEBYTECODE=1 \
-   /root/miniconda3/bin/python examples/run_qwen3_attention_search.py \
+   $PYTHON examples/run_qwen3_attention_search.py \
      --model-id Qwen/Qwen3-0.6B \
      --device gpu \
      --max-layers 8 \
      --max-prompts 2 \
      --seq-len 128 \
-     --cache-dir /root/autodl-tmp/PUZZLE/hf_cache/models \
-     --output /root/autodl-tmp/PUZZLE/outputs/qwen3_0_6b_layer_skip_search.json \
-     --pth-output /root/autodl-tmp/PUZZLE/checkpoints/qwen3_0_6b_layer_skip_search.pth'
+     --cache-dir $REMOTE_WORKDIR/hf_cache/models \
+     --output $REMOTE_WORKDIR/outputs/qwen3_0_6b_layer_skip_search.json \
+     --pth-output $REMOTE_WORKDIR/checkpoints/qwen3_0_6b_layer_skip_search.pth'
 ```
 
 ### 6.2 下载输出摘要
@@ -325,7 +326,7 @@ generation_config.json: 239B
 缓存目录：
 
 ```text
-/root/autodl-tmp/PUZZLE/hf_cache/models
+$REMOTE_WORKDIR/hf_cache/models
 ```
 
 ### 6.3 运行输出
@@ -353,8 +354,8 @@ generation_config.json: 239B
 脚本输出路径：
 
 ```text
-wrote=/root/autodl-tmp/PUZZLE/outputs/qwen3_0_6b_layer_skip_search.json
-wrote_pth=/root/autodl-tmp/PUZZLE/checkpoints/qwen3_0_6b_layer_skip_search.pth
+wrote=$REMOTE_WORKDIR/outputs/qwen3_0_6b_layer_skip_search.json
+wrote_pth=$REMOTE_WORKDIR/checkpoints/qwen3_0_6b_layer_skip_search.pth
 ```
 
 ## 7. 产物验证
@@ -362,12 +363,12 @@ wrote_pth=/root/autodl-tmp/PUZZLE/checkpoints/qwen3_0_6b_layer_skip_search.pth
 ### 7.1 验证命令
 
 ```bash
-ssh -tt -p 33052 root@connect.nma1.seetacloud.com \
-  'cd /root/autodl-tmp/PUZZLE && \
+ssh -tt -p <ssh-port> <user>@<remote-host> \
+  'cd $REMOTE_WORKDIR && \
    echo "== project files ==" && ls -lh outputs checkpoints && \
    echo "== dirs ==" && du -sh hf_cache vendor checkpoints outputs 2>/dev/null && \
    echo "== default cache qwen leftovers ==" && \
-   find /root/.cache/huggingface -maxdepth 4 -iname "*Qwen3-0.6B*" -print 2>/dev/null | head -20'
+   find $HOME/.cache/huggingface -maxdepth 4 -iname "*Qwen3-0.6B*" -print 2>/dev/null | head -20'
 ```
 
 输出：
@@ -389,7 +390,7 @@ total 4.0K
 12K     outputs
 
 == default cache qwen leftovers ==
-# 无输出，表示默认 /root/.cache/huggingface 下没有 Qwen3-0.6B 残留
+# 无输出，表示默认 $HOME/.cache/huggingface 下没有 Qwen3-0.6B 残留
 ```
 
 ### 7.2 JSON 头部摘要
@@ -399,9 +400,9 @@ total 4.0K
   "model_id": "Qwen/Qwen3-0.6B",
   "device": "cuda",
   "dtype": "torch.bfloat16",
-  "root": "/root/autodl-tmp/PUZZLE",
-  "cache_dir": "/root/autodl-tmp/PUZZLE/hf_cache/models",
-  "vendor_dir": "/root/autodl-tmp/PUZZLE/vendor/python",
+  "root": "$REMOTE_WORKDIR",
+  "cache_dir": "$REMOTE_WORKDIR/hf_cache/models",
+  "vendor_dir": "$REMOTE_WORKDIR/vendor/python",
   "num_model_layers": 28,
   "searched_layers": [0, 1, 2, 3, 4, 5, 6, 7],
   "num_prompts": 2,
@@ -435,7 +436,7 @@ total 4.0K
 ## 8. 最终目录结构摘要
 
 ```text
-/root/autodl-tmp/PUZZLE
+$REMOTE_WORKDIR
 ├── examples/run_qwen3_attention_search.py
 ├── puzzle_nas/
 ├── vendor/python/                         # 项目内 Python 依赖库
@@ -478,9 +479,9 @@ fla_linear_attn
 ### 10.2 FLA 相关项目内路径
 
 ```text
-/root/autodl-tmp/PUZZLE/vendor/flash-linear-attention
-/root/autodl-tmp/PUZZLE/vendor/flash-linear-attention-v0.4.2
-/root/autodl-tmp/PUZZLE/vendor/python
+$REMOTE_WORKDIR/vendor/flash-linear-attention
+$REMOTE_WORKDIR/vendor/flash-linear-attention-v0.4.2
+$REMOTE_WORKDIR/vendor/python
 ```
 
 说明：
@@ -492,21 +493,21 @@ fla_linear_attn
 ### 10.3 FLA smoke test 命令
 
 ```bash
-ssh -tt -p 33052 root@connect.nma1.seetacloud.com \
-  'cd /root/autodl-tmp/PUZZLE && \
+ssh -tt -p <ssh-port> <user>@<remote-host> \
+  'cd $REMOTE_WORKDIR && \
    HF_ENDPOINT=https://hf-mirror.com \
    HF_HUB_DISABLE_XET=1 \
    PYTHONDONTWRITEBYTECODE=1 \
-   /root/miniconda3/bin/python examples/run_qwen3_attention_search.py \
+   $PYTHON examples/run_qwen3_attention_search.py \
      --model-id Qwen/Qwen3-0.6B \
      --device gpu \
      --max-layers 1 \
      --max-prompts 1 \
      --seq-len 64 \
      --variants parent,skip_attn,fla_linear_attn \
-     --cache-dir /root/autodl-tmp/PUZZLE/hf_cache/models \
-     --output /root/autodl-tmp/PUZZLE/outputs/qwen3_0_6b_fla_smoke.json \
-     --pth-output /root/autodl-tmp/PUZZLE/checkpoints/qwen3_0_6b_fla_smoke.pth'
+     --cache-dir $REMOTE_WORKDIR/hf_cache/models \
+     --output $REMOTE_WORKDIR/outputs/qwen3_0_6b_fla_smoke.json \
+     --pth-output $REMOTE_WORKDIR/checkpoints/qwen3_0_6b_fla_smoke.pth'
 ```
 
 输出：
@@ -541,21 +542,21 @@ smoke test 的 JSON 中确认 `fla_linear_attn` 已参与打分：
 ### 10.4 8 层 FLA 候选运行命令
 
 ```bash
-ssh -tt -p 33052 root@connect.nma1.seetacloud.com \
-  'cd /root/autodl-tmp/PUZZLE && \
+ssh -tt -p <ssh-port> <user>@<remote-host> \
+  'cd $REMOTE_WORKDIR && \
    HF_ENDPOINT=https://hf-mirror.com \
    HF_HUB_DISABLE_XET=1 \
    PYTHONDONTWRITEBYTECODE=1 \
-   /root/miniconda3/bin/python examples/run_qwen3_attention_search.py \
+   $PYTHON examples/run_qwen3_attention_search.py \
      --model-id Qwen/Qwen3-0.6B \
      --device gpu \
      --max-layers 8 \
      --max-prompts 2 \
      --seq-len 128 \
      --variants parent,skip_attn,skip_mlp,skip_both,fla_linear_attn \
-     --cache-dir /root/autodl-tmp/PUZZLE/hf_cache/models \
-     --output /root/autodl-tmp/PUZZLE/outputs/qwen3_0_6b_fla_attention_search.json \
-     --pth-output /root/autodl-tmp/PUZZLE/checkpoints/qwen3_0_6b_fla_attention_search.pth'
+     --cache-dir $REMOTE_WORKDIR/hf_cache/models \
+     --output $REMOTE_WORKDIR/outputs/qwen3_0_6b_fla_attention_search.json \
+     --pth-output $REMOTE_WORKDIR/checkpoints/qwen3_0_6b_fla_attention_search.pth'
 ```
 
 输出：
@@ -583,8 +584,8 @@ ssh -tt -p 33052 root@connect.nma1.seetacloud.com \
 结果文件：
 
 ```text
-/root/autodl-tmp/PUZZLE/outputs/qwen3_0_6b_fla_attention_search.json
-/root/autodl-tmp/PUZZLE/checkpoints/qwen3_0_6b_fla_attention_search.pth
+$REMOTE_WORKDIR/outputs/qwen3_0_6b_fla_attention_search.json
+$REMOTE_WORKDIR/checkpoints/qwen3_0_6b_fla_attention_search.pth
 ```
 
 结果确认：

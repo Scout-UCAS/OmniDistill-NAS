@@ -11,12 +11,13 @@ DISTILL_NAS_VENDOR_PYTHON="${DISTILL_NAS_VENDOR_PYTHON:-${DISTILL_NAS_VENDOR_DIR
 cd "${PROJECT_ROOT}"
 
 if [[ -z "${PYTHON:-}" ]]; then
-  if [[ -x /root/miniconda3/bin/python ]]; then
-    PYTHON=/root/miniconda3/bin/python
-  elif command -v python3 >/dev/null 2>&1; then
+  if command -v python3 >/dev/null 2>&1; then
     PYTHON=python3
-  else
+  elif command -v python >/dev/null 2>&1; then
     PYTHON=python
+  else
+    echo "No Python interpreter found. Set PYTHON=/path/to/python before running the workflow." >&2
+    exit 1
   fi
 fi
 

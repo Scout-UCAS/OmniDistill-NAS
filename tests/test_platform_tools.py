@@ -246,6 +246,40 @@ class PlatformToolsTest(unittest.TestCase):
 
         self.assertEqual(payload["benchmarks"][0]["command"][0], sys.executable)
 
+    def test_benchmark_command_paths_resolve_when_workdir_differs(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "suite_root"
+            tools_dir = root / "tools"
+            tools_dir.mkdir(parents=True)
+            script = tools_dir / "write_marker.py"
+            script.write_text("from pathlib import Path\nPath('marker.txt').write_text('ok', encoding='utf-8')\n", encoding="utf-8")
+            suite = root / "suite.json"
+            suite.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "name": "external-relative-script",
+                        "benchmarks": [
+                            {
+                                "id": "marker",
+                                "task": "external",
+                                "backend": "qwen",
+                                "command": ["python3", "tools/write_marker.py"],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            workdir = Path(tmp) / "work"
+            workdir.mkdir()
+            payload = run_benchmark_suite(suite, result_dir=Path(tmp) / "runs", workdir=workdir, allow_commands=True)
+
+            self.assertEqual(payload["benchmarks"][0]["status"], "completed")
+            self.assertEqual(payload["benchmarks"][0]["command"][0], sys.executable)
+            self.assertEqual(payload["benchmarks"][0]["command"][1], str(script.resolve()))
+            self.assertTrue((workdir / "marker.txt").exists())
+
     def test_cli_default_benchmark_uses_packaged_assets_outside_repo(self) -> None:
         old_cwd = Path.cwd()
         stdout = io.StringIO()
